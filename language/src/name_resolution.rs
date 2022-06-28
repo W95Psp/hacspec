@@ -164,8 +164,11 @@ fn resolve_expression(
                     .map(|(pat, arm)| {
                         let (new_pat, new_name_context) =
                             resolve_pattern(sess, &pat, top_level_ctx)?;
-                        let name_context = new_name_context.union(name_context.clone());
-                        let new_arm = resolve_expression(sess, arm, &name_context, top_level_ctx)?;
+			let mut updated_name_context = name_context.clone();
+                        for (k, v) in new_name_context.into_iter() {
+                            updated_name_context = updated_name_context.update(k, v);
+                        }
+                        let new_arm = resolve_expression(sess, arm, &updated_name_context, top_level_ctx)?;
                         Ok(((new_pat,pat.1), new_arm))
                     })
                     .collect(),
