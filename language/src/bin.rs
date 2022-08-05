@@ -7,7 +7,7 @@ fn driver() -> PathBuf {
     let mut driver = env::current_exe()
         .expect("invalid path for cargo hacspec")
         .with_file_name("hacspec-driver");
-
+    
     if cfg!(windows) {
         driver.set_extension("exe");
     }

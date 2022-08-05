@@ -1,0 +1,15 @@
+error: cannot find attribute `a` in this scope
+ --> /home/lucas/Bureau/hacspec/test/src/test.rs:2:3
+  |
+2 | #[a()]
+  |   ^
+
+error: cannot find attribute `a` in this scope
+ --> /home/lucas/Bureau/hacspec/test/src/test.rs:3:3
+  |
+3 | #[a = "3"] fn f () { }
+  |   ^
+
+error: aborting due to 2 previous errors
+
+Error: 1

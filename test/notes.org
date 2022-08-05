@@ -1,0 +1,361 @@
+* Definitions
+
+#+BEGIN_SRC emacs-lisp
+      ;; (require 'org-babel)
+
+      (defun file-to-string (file)
+        "File to string function"
+        (with-temp-buffer
+          (insert-file-contents file)
+          (buffer-string)))
+
+      (defun org-babel-execute:rust (body params)
+        "Execute a block of Nim code with org-babel."
+        (let (
+              (in-file "src/test.rs")
+              (verbosity (or (cdr (assq :verbosity params)) 0))
+              )
+          (with-temp-file in-file (insert "#![allow(warnings)]\n") (insert body))
+          (let (
+                (r (org-babel-eval
+                    (format "~/.cargo/bin/cargo-hacspec -e fst --dir out hacspec-test 2> >(tee stderr.log >&2)" verbosity
+                            (org-babel-process-file-name in-file))
+                    ""))
+                )
+            (if r
+                (let* (
+                       (str (file-to-string "out/Hacspec.Test.fst"))
+                       (out (string-trim (string-join (cdr (cdr (cdr (cdr (cdr (split-string str "\n")))))) "\n")))
+                       )
+                  (concat "#+begin_src fstar\n" out "\n#+end_src\n")
+                  )
+              (concat "#+begin_src\n"
+                      (string-trim (car (split-string (file-to-string "stderr.log") "error: aborting due to")))
+                      "\n#+end_src\n"
+                      )
+              ))
+          )
+        )
+
+#+END_SRC
+
+#+RESULTS:
+: org-babel-execute:rust
+
+* List
+** Comments are not transported
+** Type constructor are postfixed with their type name
+#+BEGIN_SRC rust :results value raw
+enum Foo { Bar }
+#+END_SRC
+
+#+RESULTS:
+#+begin_src fstar
+noeq type foo_t =
+| Bar_foo_t : foo_t
+#+end_src
+
+** Types parameters are forbidden
+#+BEGIN_SRC rust :results value raw
+enum Foo<T> { Bar(T) }
+#+END_SRC
+
+#+RESULTS:
+#+begin_src
+error[Hacspec]: type parameters in enum declarations forbidden in Hacspec
+ --> /home/lucas/Bureau/hacspec/test/src/test.rs:2:9
+  |
+2 | enum Foo<T> { Bar(T) }
+  |         ^^^
+
+error: unable to translate to Hacspec due to out-of-language errors
+#+end_src
+
+** Cannot leave type implicit
+*** This fails
+#+BEGIN_SRC rust :results value raw
+  use hacspec_lib::*;
+  fn test() -> Result<(),()> {
+    Ok(())
+  }
+#+END_SRC
+
+#+RESULTS:
+#+begin_src
+error[Hacspec]: type T[3113] cannot be unified, Hacspec does not handle that kind of parametricity
+
+error[Hacspec]: A type variable cannot be unified, please provide the type parameters for this function
+ --> /home/lucas/Bureau/hacspec/test/src/test.rs:4:3
+  |
+4 |   Ok(())
+  |   ^^
+
+error: found some Hacspec typechecking errors
+#+end_src
+*** But this doesn't
+#+BEGIN_SRC rust :results value raw
+  use hacspec_lib::*;
+  fn test() -> Result<(),()> {
+      Result::<(), ()>::Ok(())
+  }
+#+END_SRC
+
+#+RESULTS:
+#+begin_src fstar
+open Hacspec.Lib
+
+let test () : (result () ()) =
+  Ok (())
+#+end_src
+** Case is not preserved, names can collide
+#+BEGIN_SRC rust :results value raw
+  fn fooBar() -> () { () }
+  fn foo_bar() -> () { () }
+#+END_SRC
+
+#+RESULTS:
+#+begin_src fstar
+let foo_bar () : () =
+  ()
+
+let foo_bar () : () =
+  ()
+#+end_src
+** Nested pattern match are not supported
+** ? operator in sub expressions
++ https://japaric.github.io/steed/std/ops/trait.Carrier.html
++ ~let?~ notation
+** Enums cannot be type generic
+
+#+BEGIN_SRC rust :results code :wrap "src fstar"
+  enum A<T> {
+      Foo(T)
+  }
+#+END_SRC
+
+#+RESULTS:
+#+begin_src fstar
+,#+begin_src
+error[Hacspec]: type parameters in enum declarations forbidden in Hacspec
+ --> /home/lucas/Bureau/hacspec/test/src/test.rs:2:7
+  |
+2 | enum A<T> {
+  |       ^^^
+
+error: unable to translate to Hacspec due to out-of-language errors
+,#+end_src
+#+end_src
+
+** Nested match are printed incorrectly
+#+BEGIN_SRC rust :results value raw
+  enum Foo {
+      A,
+      B(Result<u32, u32>),
+  }
+  fn test(x: Foo, y: u32) -> u32 {
+    match x {
+        Foo::B(x) => match x {
+              Result::<u32, u32>::Ok(x) => x,
+              Result::<u32, u32>::Err(y) => y
+            },
+        Foo::A => y,
+    }
+  }
+#+END_SRC
+
+#+RESULTS:
+#+begin_src fstar
+noeq type foo_t =
+| A_foo_t : foo_t
+| B_foo_t : (result pub_uint32 pub_uint32) -> foo_t
+
+let test (x_0 : foo_t) (y_1 : pub_uint32) : pub_uint32 =
+  match x_0 with
+  | B_foo_t x_2 -> match x_2 with
+  | Ok x_3 -> x_3
+  | Err y_4 -> y_4
+  | A_foo_t -> y_1
+#+end_src
+
+** Match with a explicitly typed branch prints incorrectly
+#+BEGIN_SRC rust  :results value raw
+  use hacspec_lib::*;
+  fn foo(p: u32) -> Result<u32, u32> {
+      let x = Result::<u32, u32>::Ok(0)?;
+      Result::<u32, u32>::Ok(0)
+  }
+#+END_SRC
+
+#+RESULTS:
+#+begin_src fstar
+open Hacspec.Lib
+
+let foo (p_0 : pub_uint32) : (result pub_uint32 pub_uint32) =
+  match (Ok (usize 0)) with
+  | Err x -> Err x
+  | Ok  x_1 : pub_uint32 ->
+    Ok (usize 0)
+#+end_src
+
+~Ok  x_1 : pub_uint32~ won't be parsed correctly by F*
+
+** Inline lets are not allowed
+#+BEGIN_SRC rust :results value raw
+  enum A {
+      Bar(u32, u32),
+      Foo(u32, u32),
+  }
+
+  fn foo(p: A) -> u32 {
+      if let A::Foo(x, y) = p {
+         x + y
+      } else { 0 }
+  }
+#+END_SRC
+
+#+RESULTS:
+#+begin_src
+error[Hacspec]: inline lets are not allowed in Hacspec
+ --> /home/lucas/Bureau/hacspec/test/src/test.rs:8:8
+  |
+8 |     if let A::Foo(x, y) = p {
+  |        ^^^^^^^^^^^^^^^^^^^^
+
+error: unable to translate to Hacspec due to out-of-language errors
+#+end_src
+
+** Wildcard not allowed in patterns
+#+BEGIN_SRC rust :results value raw
+  enum A {Foo, Bar, Foobar}
+  fn test(x: A) {
+      match x {
+          A::Foo => (),
+          _ => ()
+      }
+  }
+#+END_SRC
+
+#+RESULTS:
+#+begin_src
+error[Hacspec]: the only types of match pattern allowed in Hacspec start by <name of the enum>::<name of the case>
+ --> /home/lucas/Bureau/hacspec/test/src/test.rs:6:9
+  |
+6 |         _ => ()
+  |         ^
+
+error: unable to translate to Hacspec due to out-of-language errors
+#+end_src
+
+** Strange type error (todo investigate)
+#+BEGIN_SRC rust :results value raw
+  enum A {Foo}
+  fn test(a: A) -> (u32, u32) {
+        let x = (3, 3);
+        x
+    }
+#+END_SRC
+
+#+RESULTS:
+#+begin_src
+error[Hacspec]: expected type (u32, u32), got (usize, usize)
+ --> /home/lucas/Bureau/hacspec/test/src/test.rs:3:18
+  |
+3 | fn test(a: A) -> (u32, u32) {
+  |                  ^^^^^^^^^^
+#+end_src
+
+** Inline blocks are disallowed
+#+BEGIN_SRC rust :results value raw
+  fn test() -> () {
+        { (); () }
+    }
+#+END_SRC
+
+#+RESULTS:
+#+begin_src
+error[Hacspec]: inline blocks are not allowed in Hacspec
+ --> /home/lucas/Bureau/hacspec/test/src/test.rs:3:7
+  |
+3 |       { (); () }
+  |       ^^^^^^^^^^
+
+error: unable to translate to Hacspec due to out-of-language errors
+#+end_src
+
+** Struct are not supported
+#+BEGIN_SRC rust :results value raw
+  struct A { field: u32 }
+#+END_SRC
+
+#+RESULTS:
+#+begin_src
+error[Hacspec]: structs with fields are forbidden in Hacspec
+ --> /home/lucas/Bureau/hacspec/test/src/test.rs:2:1
+  |
+2 | struct A { field: u32 }
+  | ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: unable to translate to Hacspec due to out-of-language errors
+#+end_src
+
+** No trait
+#+BEGIN_SRC rust :results value raw
+  trait T {}
+#+END_SRC
+
+#+RESULTS:
+#+begin_src
+error[Hacspec]: trait declarations not allowed in Hacspec
+ --> /home/lucas/Bureau/hacspec/test/src/test.rs:2:1
+  |
+2 | trait T {}
+  | ^^^^^^^^^^
+
+error: unable to translate to Hacspec due to out-of-language errors
+#+end_src
+
+** No modules
+#+BEGIN_SRC rust :results value raw
+  mod m {
+      
+  }
+#+END_SRC
+
+#+RESULTS:
+#+begin_src
+error[Hacspec]: sub-modules not allowed in Hacspec
+ --> /home/lucas/Bureau/hacspec/test/src/test.rs:2:1
+  |
+2 | / mod m {
+3 | |
+4 | | }
+  | |_^
+
+error: unable to translate to Hacspec due to out-of-language errors
+#+end_src
+
+** T
+#+BEGIN_SRC rust :results value raw
+  enum A { Foo }
+  pub fn f(Foo: A) {}
+  fn g() {}
+#+END_SRC
+
+** What to do with the ~pub~ qualifier
+#+BEGIN_SRC rust :results value raw
+  pub fn f() {}
+  fn g() {}
+#+END_SRC
+
+#+RESULTS:
+#+begin_src fstar
+let f () : unit =
+  ()
+  ()
+
+let g () : unit =
+  ()
+  ()
+#+end_src
+
+
