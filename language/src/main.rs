@@ -98,6 +98,20 @@ fn construct_module_string<T>(
     }
 }
 
+fn crate_without_unloaded_mod(krate: rustc_ast::ast::Crate) -> rustc_ast::ast::Crate {
+    use rustc_ast::ast::*;
+    Crate {
+	items: krate.items
+	    .into_iter()
+	    .filter(|x| match x.kind {
+		ItemKind::Mod(Unsafe::No, ModKind::Unloaded) => false,
+		_ => true,
+	    })
+	    .collect(),
+	..krate
+    }
+}
+
 fn construct_handle_crate_queue<'tcx>(
     compiler: &Compiler,
     handled: &mut HashSet<String>,
@@ -125,68 +139,36 @@ fn construct_handle_crate_queue<'tcx>(
 
     let krate = ast_crates_map[&krate_module_string].clone();
 
-    let mut krates = Vec::new();
-
-    let krate = match krate {
-        rustc_ast::ast::Crate { attrs, items, span } => {
-            // Parse over the crate, loading modules and filling top_level_ctx
-            for x in items.clone().into_iter() {
-                match x.kind {
-                    // Whenever a module statement is encountered, add it to the queue
-                    rustc_ast::ast::ItemKind::Mod(
-                        rustc_ast::ast::Unsafe::No,
-                        rustc_ast::ast::ModKind::Unloaded,
-                    ) => {
-                        match construct_handle_crate_queue(
-                            compiler,
-                            handled,
-                            ast_crates_map,
-                            x.ident.name.to_ident_string(),
-                            krate_path.clone(),
-                        ) {
-                            Ok(v) => krates.extend(v),
-                            Err(false) => {
-                                // If not able to handle module, stop compilation.
-                                return Err(false);
-                            }
-                            Err(true) => (),
-                        }
-                    }
-                    _ => (),
-                }
+    // Parse over the crate, loading modules and filling top_level_ctx
+    let krates = krate.items.clone().into_iter().map(|item| match item.kind {
+	// Whenever a module statement is encountered, add it to the queue
+	rustc_ast::ast::ItemKind::Mod(
+            rustc_ast::ast::Unsafe::No,
+            rustc_ast::ast::ModKind::Unloaded,
+        ) =>
+	    match construct_handle_crate_queue(
+		compiler,
+		handled,
+		ast_crates_map,
+		item.ident.name.to_ident_string(),
+		krate_path.clone(),
+            ) {
+		Ok(v) => Ok(Some(v)),
+		Err(false) => // If not able to handle module, stop compilation.
+                    Err(false),
+		Err(true) => Ok(None),
             }
-
-            // Remove the modules statements from the crate
-            rustc_ast::ast::Crate {
-                attrs,
-                items: items
-                    .clone()
-                    .into_iter()
-                    .filter(|x| match x.kind {
-                        rustc_ast::ast::ItemKind::Mod(
-                            rustc_ast::ast::Unsafe::No,
-                            rustc_ast::ast::ModKind::Unloaded,
-                        ) => false,
-                        _ => true,
-                    })
-                    .collect(),
-                span,
-            }
-        }
-    };
-
-    krates.push((
-        (
-            krate_path.clone(),
-            krate_dir.clone(),
-            krate_module_string.clone(),
-        ),
-        krate,
-    ));
+        _ => Ok(None),
+    }).collect::<Result<Vec<Option<Vec<_>>>, _>>()?;
 
     handled.insert(krate_module_string.clone());
 
-    Ok(krates)
+    Ok(krates.into_iter().flatten().flatten()
+	.chain(
+	    std::iter::once((
+		(krate_path, krate_dir, krate_module_string),
+		crate_without_unloaded_mod(krate)
+	    ))).collect())
 }
 
 fn handle_crate<'tcx>(
@@ -211,66 +193,41 @@ fn handle_crate<'tcx>(
         }
         Err(true) => return Compilation::Continue, // Nothing at all, should probably never happen
     };
+    
 
     let top_ctx_map: &mut HashMap<String, name_resolution::TopLevelContext> = &mut HashMap::new();
     let special_names_map: &mut HashMap<String, ast_to_rustspec::SpecialNames> =
         &mut HashMap::new();
 
-    let krate_use_paths: &mut HashMap<String, Vec<String>> = &mut HashMap::new();
-
     // Get all 'use' dependencies per module
-    let mut krate_queue_no_module_statements = Vec::new();
-    for ((krate_path, krate_dir, krate_module_string), krate) in krate_queue {
-        krate_use_paths.insert(krate_path.clone(), Vec::new());
-
-        match krate {
-            rustc_ast::ast::Crate { attrs, items, span } => {
-                // Parse over the crate, loading modules and filling top_level_ctx
-                for x in items.clone().into_iter() {
-                    match x.kind {
-                        // Load the top_ctx from the module specified in the use statement
-                        rustc_ast::ast::ItemKind::Use(ref tree) => {
-                            match tree.kind {
-                                rustc_ast::ast::UseTreeKind::Glob => {
-                                    krate_use_paths[&krate_path].push(
-                                        (&tree.prefix)
-                                            .segments
-                                            .last()
-                                            .unwrap()
-                                            .ident
-                                            .name
-                                            .to_ident_string(),
-                                    );
-                                }
-                                _ => (),
-                            };
-                        }
-                        _ => (),
-                    }
-                }
-
-                // Remove the modules statements from the crate
-                krate_queue_no_module_statements.push((
-                    (krate_path, krate_dir, krate_module_string),
-                    rustc_ast::ast::Crate {
-                        attrs,
-                        items: items
-                            .clone()
-                            .into_iter()
-                            .filter(|x| match x.kind {
-                                rustc_ast::ast::ItemKind::Mod(
-                                    rustc_ast::ast::Unsafe::No,
-                                    rustc_ast::ast::ModKind::Unloaded,
-                                ) => false,
-                                _ => true,
-                            })
-                            .collect(),
-                        span,
-                    },
-                ))
-            }
-        }
-    }
+    let krate_use_paths: HashMap<String, Vec<String>> =
+	krate_queue.clone().into_iter().map(
+	    |((krate_path, _, _), krate)|
+	    ( krate_path,
+	      krate.items.clone().into_iter().filter_map(
+		  |x| match x.kind {
+		      // Load the top_ctx from the module specified in the use statement
+		      rustc_ast::ast::ItemKind::Use(ref tree) => {
+			  match tree.kind {
+			      rustc_ast::ast::UseTreeKind::Glob => {
+				  Some((&tree.prefix)
+				       .segments
+				       .last()
+				       .unwrap()
+				       .ident
+				       .name
+				       .to_ident_string())
+			      }
+			      _ => None,
+			  }
+		      }
+		      _ => None
+		  }).collect::<Vec<String>>()
+	    )
+	).collect();
+    
+    let krate_queue_no_module_statements: Vec<_> = krate_queue.clone().into_iter()
+	.map(|(pathinfo, krate)| (pathinfo, crate_without_unloaded_mod(krate))).collect();
 
     /////////////////////////////////
     // Start of actual translation //

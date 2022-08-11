@@ -717,143 +717,126 @@ pub fn retrieve_external_data(
     imported_crates.push(("core".to_string(), DUMMY_SP.into()));
     imported_crates.push(("abstract_integers".to_string(), DUMMY_SP.into()));
     imported_crates.push(("secret_integers".to_string(), DUMMY_SP.into()));
-    for krate_num in krates {
-        let crate_name = tcx.crate_name(*krate_num);
-        if imported_crates
-            .iter()
-            .filter(|(imported_crate, _)| {
-                *imported_crate == crate_name.to_ident_string()
-                    || crate_name.to_ident_string() == tcx.crate_name(LOCAL_CRATE).to_ident_string()
-            })
-            .collect::<Vec<_>>()
-            .len()
-            > 0
-        {
-            if *krate_num != LOCAL_CRATE {
-                let num_def_ids = crate_store.num_def_ids_untracked(*krate_num);
-                let def_ids = (0..num_def_ids).into_iter().map(|id| DefId {
-                    krate: *krate_num,
-                    index: DefIndex::from_usize(id),
-                });
-                for def_id in def_ids {
-                    let def_path = tcx.def_path(def_id);
-                    match &def_path.data.last() {
-                        Some(x) => {
-                            // We only import things really defined in the crate
-                            if tcx.crate_name(def_path.krate).to_ident_string()
-                                == crate_name.to_ident_string()
-                            {
-                                match x.data {
-                                    DefPathData::TypeNs(name) => match tcx.def_kind(def_id) {
-                                        DefKind::Struct | DefKind::Enum => {
-                                            add_special_type_from_struct_shape(
-                                                tcx,
-                                                def_id,
-                                                &tcx.type_of(def_id),
-                                                &mut extern_arrays,
-                                                &mut extern_nat_ints,
-                                                &mut extern_enums,
-                                            )
-                                        }
-                                        DefKind::TyAlias => {
-                                            if def_path.data.len() <= 2 {
-                                                let typ = tcx.type_of(def_id);
-                                                match translate_base_typ(tcx, &typ, &HashMap::new())
-                                                {
-                                                    Err(_) => (),
-                                                    Ok((hacspec_ty, _)) => {
-                                                        ty_aliases.insert(
-                                                            name.to_ident_string(),
-                                                            hacspec_ty,
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                        }
+    println!("imported_crates={:#?}", imported_crates);
 
-                                        _ => (),
-                                    },
-                                    DefPathData::ValueNs(_) => process_fn_id(
-                                        sess,
-                                        tcx,
-                                        &def_id,
-                                        krate_num,
-                                        &mut extern_funcs,
-                                        &mut extern_consts,
-                                    ),
-                                    DefPathData::Ctor => {
-                                        if
-                                        // This filter here is complicated. It is used to not check
-                                        // some def_id corresponding to constructors of structs
-                                        // having a special behavior, for instance std::PhantomData
-                                        // or gimli::common::Dwarf64.
-                                        // tcx.type_of(def_id).is_fn() captures those special cases
-                                        tcx.type_of(def_id).is_fn() {
-                                            let export_sig = tcx.fn_sig(def_id);
-                                            let sig = match translate_polyfnsig(
-                                                tcx,
-                                                &export_sig,
-                                                &HashMap::new(),
-                                            ) {
-                                                Ok((sig, _)) => Ok(sig),
-                                                Err(()) => Err(format!("{}", export_sig)),
-                                            };
-                                            let name_segment =
-                                                def_path.data[def_path.data.len() - 2];
-                                            match name_segment.data {
-                                                DefPathData::TypeNs(name) => {
-                                                    let fn_key =
-                                                        FnKey::Independent(TopLevelIdent {
-                                                            string: name.to_ident_string(),
-                                                            kind: TopLevelIdentKind::Function,
-                                                        });
-                                                    extern_funcs.insert(fn_key, sig);
-                                                }
-                                                _ => (),
-                                            }
-                                        } else {
-                                            ()
-                                        }
-                                    }
-                                    _ => (),
-                                }
-                            }
-                        }
-                        _ => (),
-                    }
-                }
-            }
-        }
-    }
-    for item in tcx.hir().items() {
-        let item_id = tcx.hir().local_def_id(item.hir_id()).to_def_id();
-        match &item.kind {
-            ItemKind::Fn(_, _, _) => process_fn_id(
-                sess,
-                tcx,
-                &item_id,
-                &LOCAL_CRATE,
-                &mut extern_funcs,
-                &mut extern_consts,
-            ),
-            ItemKind::Impl(i) => {
-                for item in i.items.iter() {
-                    let item_id = tcx.hir().local_def_id(item.id.hir_id()).to_def_id();
-                    if let AssocItemKind::Fn { .. } = item.kind {
-                        process_fn_id(
-                            sess,
-                            tcx,
-                            &item_id,
-                            &LOCAL_CRATE,
-                            &mut extern_funcs,
-                            &mut extern_consts,
-                        )
-                    }
-                }
-            }
-            _ => (),
-        }
-    }
+    // fn is_krate_imported(name: rustc_span::symbol::Symbol) -> impl FnOnce() -> bool {
+    // 	|| imported_crates.into_iter().any(
+    // 	    |(imported_crate, _)|
+    // 	    *imported_crate == name.to_ident_string()
+    //             || name.to_ident_string() == tcx.crate_name(LOCAL_CRATE).to_ident_string()
+    // 	);
+    // }
+
+    let is_krate_imported = 
+	|name: rustc_span::symbol::Symbol| imported_crates.iter().any(
+	    |(imported_crate, _)|
+	    *imported_crate == name.to_ident_string()
+                || name.to_ident_string() == tcx.crate_name(LOCAL_CRATE).to_ident_string()
+	);
+    
+    let import_def_id =
+	|(krate_num, def_id): (CrateNum, DefId)| {
+            let def_path = tcx.def_path(def_id);
+	    if let Some(seg) = &def_path.data.last() {
+		println!("ONESTLA={}", def_path.to_string_no_crate_verbose());
+		if def_path.to_string_no_crate_verbose().contains("ERROR") {
+		    println!("ERR_IS={:#?}", seg.data);
+		}
+		match seg.data {
+		    DefPathData::TypeNs(name) => match tcx.def_kind(def_id) {
+			DefKind::Struct | DefKind::Enum => {
+			    add_special_type_from_struct_shape(
+				tcx,
+				def_id,
+				&tcx.type_of(def_id),
+				&mut extern_arrays,
+				&mut extern_nat_ints,
+				&mut extern_enums,
+			    )
+			}
+			DefKind::TyAlias if def_path.data.len() <= 2 => {
+			    match translate_base_typ(tcx, &tcx.type_of(def_id), &HashMap::new())
+			    {
+				Err(_) => (),
+				Ok((hacspec_ty, _)) => {
+				    ty_aliases.insert(
+					name.to_ident_string(),
+					hacspec_ty,
+				    );
+				}
+			    }
+			}
+
+			_ => (),
+		    },
+		    DefPathData::ValueNs(_) => process_fn_id(
+			sess,
+			tcx,
+			&def_id,
+			&krate_num,
+			&mut extern_funcs,
+			&mut extern_consts,
+		    ),
+		    DefPathData::Ctor => {
+			if
+			// This filter here is complicated. It is used to not check
+			// some def_id corresponding to constructors of structs
+			// having a special behavior, for instance std::PhantomData
+			// or gimli::common::Dwarf64.
+			// tcx.type_of(def_id).is_fn() captures those special cases
+			    tcx.type_of(def_id).is_fn() {
+				let export_sig = tcx.fn_sig(def_id);
+
+				let sig = match translate_polyfnsig(
+				    tcx,
+				    &export_sig,
+				    &HashMap::new(),
+				) {
+				    Ok((sig, _)) => Ok(sig),
+				    Err(()) => Err(format!("{}", export_sig)),
+				};
+				let name_segment =
+				    def_path.data[def_path.data.len() - 2];
+				match name_segment.data {
+				    DefPathData::TypeNs(name) => {
+					let fn_key =
+					    FnKey::Independent(TopLevelIdent {
+						string: name.to_ident_string(),
+						kind: TopLevelIdentKind::Function,
+					    });
+					extern_funcs.insert(fn_key, sig);
+				    }
+				    _ => (),
+				}
+			    }
+		    }
+		    _ => (),
+		}
+	    }
+	};
+
+    krates.into_iter()
+        .filter(|krate_num| **krate_num != LOCAL_CRATE)
+	.map(|krate_num| (krate_num.clone(), tcx.crate_name(*krate_num)))
+	.filter(|(_, krate_name)| is_krate_imported(krate_name.clone()))
+	.map(|(krate_num, crate_name)|
+	     (0..crate_store.num_def_ids_untracked(krate_num)).into_iter().map(move |id| DefId {
+                 krate: krate_num,
+                 index: DefIndex::from_usize(id),
+             }).filter(move |def_id|
+		       tcx.crate_name(tcx.def_path(*def_id).krate).to_ident_string()
+		       == crate_name.to_ident_string()
+	     ).map(move |def_id| (krate_num.clone(), def_id))
+	)
+	.flatten()
+	.chain(
+	    tcx.hir().items().map(
+		|item|
+		(LOCAL_CRATE, tcx.hir().local_def_id(item.hir_id()).to_def_id())
+	    )
+	)
+	.for_each(import_def_id);
+
     ExternalData {
         funcs: extern_funcs,
         consts: extern_consts,
