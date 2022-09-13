@@ -1874,14 +1874,9 @@ fn typecheck_pattern(
                 ((Borrowing::Consumed, _), (BaseTyp::Enum(cases, _type_args), cases_span)),
                 DictEntry::Enum,
             )) => {
-                let ((cn, _), ct) = cases.into_iter().next().unwrap();
-		let mut case_name = cn.clone();
-		let mut case_typ = ct.clone();
-                while (case_name.string != pat_enum_name.string) {
-                    let ((cn, _), ct) = cases.into_iter().next().unwrap();
-		    case_name = cn.clone();
-		    case_typ = ct.clone();
-		}
+                let (_, case_typ) = cases.into_iter().find(
+		    |((cn,_),_)| cn.string == pat_enum_name.string
+		).unwrap();
                 match (inner_pat,case_typ) {
                     (None,None) => {Ok(HashMap::new())}
                     (Some(_),None) => {
