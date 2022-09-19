@@ -1,0 +1,59 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `examples-unsafe/src/ec/p384.rs`."><meta name="keywords" content="rust, rustlang, rust-lang"><title>p384.rs - source</title><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../SourceSerif4-Regular.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../FiraSans-Regular.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../FiraSans-Medium.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../SourceCodePro-Regular.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../SourceSerif4-Bold.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../SourceCodePro-Semibold.ttf.woff2"><link rel="stylesheet" type="text/css" href="../../../normalize.css"><link rel="stylesheet" type="text/css" href="../../../rustdoc.css" id="mainThemeStyle"><link rel="stylesheet" type="text/css" href="../../../ayu.css" disabled><link rel="stylesheet" type="text/css" href="../../../dark.css" disabled><link rel="stylesheet" type="text/css" href="../../../light.css" id="themeStyle"><script id="default-settings" ></script><script src="../../../storage.js"></script><script defer src="../../../source-script.js"></script><script defer src="../../../source-files.js"></script><script defer src="../../../main.js"></script><noscript><link rel="stylesheet" href="../../../noscript.css"></noscript><link rel="alternate icon" type="image/png" href="../../../favicon-16x16.png"><link rel="alternate icon" type="image/png" href="../../../favicon-32x32.png"><link rel="icon" type="image/svg+xml" href="../../../favicon.svg"></head><body class="rustdoc source"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle">&#9776;</button><a class="sidebar-logo" href="../../../unsafe_hacspec_examples/index.html"><div class="logo-container"><img class="rust-logo" src="../../../rust-logo.svg" alt="logo"></div>
+        </a><h2 class="location"></h2>
+    </nav>
+    <nav class="sidebar"><a class="sidebar-logo" href="../../../unsafe_hacspec_examples/index.html"><div class="logo-container"><img class="rust-logo" src="../../../rust-logo.svg" alt="logo"></div>
+        </a></nav><main><div class="width-limiter"><div class="sub-container"><a class="sub-logo-container" href="../../../unsafe_hacspec_examples/index.html"><img class="rust-logo" src="../../../rust-logo.svg" alt="logo"></a><nav class="sub"><form class="search-form"><div class="search-container"><span></span><input class="search-input" name="search" autocomplete="off" spellcheck="false" placeholder="Click or press ‘S’ to search, ‘?’ for more options…" type="search"><div id="help-button" title="help" tabindex="-1"><button type="button">?</button></div><div id="settings-menu" tabindex="-1">
+                                <a href="../../../settings.html" title="settings"><img width="22" height="22" alt="Change settings" src="../../../wheel.svg"></a></div>
+                        </div></form></nav></div><section id="main-content" class="content"><div class="example-wrap"><pre class="line-numbers"><span id="1">1</span>
+<span id="2">2</span>
+<span id="3">3</span>
+<span id="4">4</span>
+<span id="5">5</span>
+<span id="6">6</span>
+<span id="7">7</span>
+<span id="8">8</span>
+<span id="9">9</span>
+<span id="10">10</span>
+<span id="11">11</span>
+<span id="12">12</span>
+<span id="13">13</span>
+<span id="14">14</span>
+<span id="15">15</span>
+<span id="16">16</span>
+<span id="17">17</span>
+<span id="18">18</span>
+<span id="19">19</span>
+<span id="20">20</span>
+<span id="21">21</span>
+<span id="22">22</span>
+<span id="23">23</span>
+<span id="24">24</span>
+<span id="25">25</span>
+</pre><pre class="rust"><code><span class="comment">// Import hacspec and all needed definitions.</span>
+<span class="kw">use</span> <span class="ident">hacspec_lib</span>::<span class="kw-2">*</span>;
+
+<span class="kw">use</span> <span class="ident"><span class="kw">crate</span>::ec::arithmetic</span>::{<span class="self">self</span>, <span class="ident">Affine</span>};
+
+<span class="macro">public_nat_mod!</span>(
+    <span class="ident">type_name</span>: <span class="ident">FieldElement</span>,
+    <span class="ident">type_of_canvas</span>: <span class="ident">FieldCanvas</span>,
+    <span class="ident">bit_size_of_field</span>: <span class="number">384</span>,
+    <span class="ident">modulo_value</span>: <span class="string">&quot;FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFFFF0000000000000000FFFFFFFF&quot;</span>
+);
+
+<span class="macro">unsigned_public_integer!</span>(<span class="ident">Scalar</span>, <span class="number">384</span>);
+
+<span class="kw">pub</span> <span class="kw">fn</span> <span class="ident">point_mul_base</span>(<span class="ident">k</span>: <span class="ident">Scalar</span>) -&gt; <span class="ident">Affine</span><span class="op">&lt;</span><span class="ident">FieldElement</span><span class="op">&gt;</span> {
+    <span class="kw">let</span> <span class="ident">base_point</span> <span class="op">=</span> <span class="ident">Affine</span>(
+        <span class="ident">FieldElement::from_hex</span>(<span class="string">&quot;AA87CA22BE8B05378EB1C71EF320AD746E1D3B628BA79B9859F741E082542A385502F25DBF55296C3A545E3872760AB7&quot;</span>),
+        <span class="ident">FieldElement::from_hex</span>(<span class="string">&quot;3617DE4A96262C6F5D9E98BF9292DC29F8F41DBD289A147CE9DA3113B5F0B8C00A60B1CE1D7E819D7A431D7C90EA0E5F&quot;</span>)
+    );
+    <span class="ident">arithmetic::point_mul</span>(<span class="ident">k</span>, <span class="ident">base_point</span>)
+}
+
+<span class="kw">pub</span> <span class="kw">fn</span> <span class="ident">point_mul</span>(<span class="ident">k</span>: <span class="ident">Scalar</span>, <span class="ident">p</span>: <span class="ident">Affine</span><span class="op">&lt;</span><span class="ident">FieldElement</span><span class="op">&gt;</span>) -&gt; <span class="ident">Affine</span><span class="op">&lt;</span><span class="ident">FieldElement</span><span class="op">&gt;</span> {
+    <span class="ident">arithmetic::point_mul</span>(<span class="ident">k</span>, <span class="ident">p</span>)
+}
+</code></pre></div>
+</section></div></main><div id="rustdoc-vars" data-root-path="../../../" data-current-crate="unsafe_hacspec_examples" data-themes="ayu,dark,light" data-resource-suffix="" data-rustdoc-version="1.64.0-nightly (495b21669 2022-07-03)" ></div>
+</body></html>

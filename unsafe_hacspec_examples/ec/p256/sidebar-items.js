@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":[["point_mul",""],["point_mul_base",""]],"struct":[["FieldCanvas",""],["FieldElement",""],["Scalar",""]]};
