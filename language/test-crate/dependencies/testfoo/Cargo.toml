@@ -1,0 +1,7 @@
+[package]
+name = "testfoo"
+version="0.1.0"
+edition="2021"
+
+[dependencies]
+testbar = { path = "../testbar" }
