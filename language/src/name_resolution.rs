@@ -157,6 +157,17 @@ fn resolve_expression(
                 e_span,
             ))
         }
+	Expression::MonadicLet(..) =>
+	    // TODO GADT: implement some kind of GADT to eliminate MonadicLet via typing information
+	    panic!("The name resolution phase expects an AST free of [Expression::MonadicLet] node."),
+	Expression::QuestionMark(e, typ) =>
+	    Ok((
+		Expression::QuestionMark(
+		    Box::new(resolve_expression(sess, *e, name_context, top_level_ctx)?),
+		    typ.clone()
+		),
+		e_span
+	    )),
         Expression::MatchWith(arg, arms) => {
             let new_arg = resolve_expression(sess, *arg, name_context, top_level_ctx)?;
             let new_arms = check_vec(
