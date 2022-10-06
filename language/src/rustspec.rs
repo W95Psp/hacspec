@@ -315,6 +315,29 @@ pub enum BinOpKind {
     Gt,
 }
 
+/// Enumaration of the types allowed as question marks's monad
+/// representation. Named after the [Carrier][std::ops::Carrier]
+/// trait.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize)]
+pub enum CarrierTyp {
+    Result(Spanned<BaseTyp>, Spanned<BaseTyp>),
+    Option(Spanned<BaseTyp>),
+}
+
+/// Extracts the payload type of a carrier type, i.e., `A` is the
+/// payload type of `Either<A, B>`.
+pub fn carrier_payload(carrier: CarrierTyp) -> Spanned<BaseTyp> {
+    match carrier {
+	CarrierTyp::Result(ok, ..) | CarrierTyp::Option(ok, ..) => ok
+    }
+}
+pub fn carrier_kind(carrier: CarrierTyp) -> EarlyReturnType {
+    match carrier {
+	CarrierTyp::Result(..) => EarlyReturnType::Result,
+	CarrierTyp::Option(..) => EarlyReturnType::Option
+    }
+}
+
 #[derive(Clone, Serialize, Debug)]
 pub enum Expression {
     Unary(UnOpKind, Box<Spanned<Expression>>, Option<Typ>),
@@ -385,7 +408,7 @@ pub enum Pattern {
     SingleCaseEnum(Spanned<TopLevelIdent>, Box<Spanned<Pattern>>),
 }
 
-#[derive(Clone, Serialize, Debug)]
+#[derive(Clone, Serialize, Debug, PartialEq)]
 pub enum EarlyReturnType {
     Option,
     Result,
