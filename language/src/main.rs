@@ -21,6 +21,7 @@ mod rustspec_to_easycrypt;
 mod rustspec_to_fstar;
 mod typechecker;
 mod util;
+mod elab_monadic_lets;
 
 use heck::TitleCase;
 use im::{HashMap, HashSet};
