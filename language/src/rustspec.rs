@@ -202,7 +202,7 @@ pub enum BaseTyp {
     Placeholder,
 }
 
-pub const UnitTyp: BaseTyp = BaseTyp::Tuple(vec!());
+pub const UnitTyp: BaseTyp = BaseTyp::Tuple(vec![]);
 
 impl fmt::Display for BaseTyp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
