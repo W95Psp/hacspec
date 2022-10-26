@@ -635,7 +635,7 @@ fn translate_expr(
         ExprKind::Path(None, path) => translate_expr_name(sess, path, &e.span, specials),
         ExprKind::Call(func, args) => {
             let func_name_kind = match &func.kind {
-                ExprKind::Path(None, path) => Ok(translate_func_name(sess, specials, &path)?),
+                ExprKind::Path(None, path) => translate_func_name(sess, specials, &path),
                 _ => {
                     sess.span_rustspec_err(
                         func.span,
