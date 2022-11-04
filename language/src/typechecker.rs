@@ -1875,10 +1875,14 @@ fn typecheck_pattern(
         }
         (Pattern::WildCard, _) => Ok(HashMap::new()),
         (Pattern::LiteralPat(l), t) => {
-            if get_literal_type(l) == t.clone() {
+            let lit_typ = get_literal_type(l);
+            if lit_typ == t.clone() {
                 Ok(HashMap::new())
             } else {
-                Err(())
+                Err(sess.span_rustspec_err(
+                    *pat_span,
+                    format!("got literal of type {}, but {} was expected", lit_typ, t).as_str(),
+                ))
             }
         }
         (Pattern::IdentPat(x), _) => {
