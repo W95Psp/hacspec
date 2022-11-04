@@ -1794,22 +1794,30 @@ fn typecheck_pattern(
                 ((Borrowing::Consumed, _), (BaseTyp::Enum(cases, type_args), cases_span)),
                 DictEntry::Enum,
             )) => {
-                let case_typ =
-		// Among all constructors [cases] of the enum we're matching against, find the
-		// one named [pat_enum_name]
-		    cases.into_iter().find(
-			|((name,_),_)| name.string == pat_enum_name.string
-		    ).unwrap().1.as_ref()
-		// The constructor we're matching against has [length(type_args)] generic type
-		// arguments, a vector of [TypVar]. We substitutes those [type_args] into their
-		// respective [case_type_annotations].
-		    .map(|case_typ| bind_variable_type(
-			sess, case_typ,
-			&type_args.iter() // build a var context (a HashMap)
-			    .map(|type_arg| type_arg.clone())
-			    .zip(case_type_annotations.iter().flatten().map(|t| t.0.clone()))
-			    .collect()
-		    ).ok()).flatten();
+                // Among all constructors [cases] of the enum we're matching against, find the
+                // one named [pat_enum_name]
+                let case_typ = cases
+                    .into_iter()
+                    .find(|((name, _), _)| name.string == pat_enum_name.string)
+                    .unwrap()
+                    .1
+                    .as_ref()
+                    // The constructor we're matching against has [length(type_args)] generic type
+                    // arguments, a vector of [TypVar]. We substitutes those [type_args] into their
+                    // respective [case_type_annotations].
+                    .map(|case_typ| {
+                        bind_variable_type(
+                            sess,
+                            case_typ,
+                            &type_args
+                                .iter() // build a var context (a HashMap)
+                                .map(|type_arg| type_arg.clone())
+                                .zip(case_type_annotations.iter().flatten().map(|t| t.0.clone()))
+                                .collect(),
+                        )
+                        .ok()
+                    })
+                    .flatten();
 
                 let failure = |message| {
                     sess.span_rustspec_err(
