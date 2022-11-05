@@ -322,15 +322,18 @@ fn insert_extern_func(
     // If the two are in hacspec then we decide in an ad hoc way
     match extern_funcs.get(&fn_key) {
         None => {
+            println!("extern_funcs.insert_1 {:#?}", fn_key);
             extern_funcs.insert(fn_key, sig);
         }
         Some(old_sig) => match (old_sig, &sig) {
             (Ok(_), Err(_)) => (),
             (Err(_), Ok(_)) => {
+                println!("extern_funcs.insert_2 {:#?}", fn_key);
                 extern_funcs.insert(fn_key, sig);
             }
             (Ok(x), Ok(y)) => {
                 if x.args.len() > y.args.len() {
+                    println!("extern_funcs.insert_3 {:#?}", fn_key);
                     extern_funcs.insert(fn_key, sig);
                 } // TODO: do something?, extern_funcs.insert(fn_key, sig);
             }
@@ -370,6 +373,7 @@ fn process_fn_id(
                                 string: name.to_ident_string(),
                                 kind: TopLevelIdentKind::Function,
                             });
+                            println!("extern_funcs.insert_4 {:#?}", fn_key);
                             insert_extern_func(extern_funcs, fn_key, sig);
                         }
                         _ => (),
@@ -399,6 +403,7 @@ fn process_fn_id(
                                         Ok((sig, _)) => Ok(sig),
                                         Err(()) => Err(format!("{}", export_sig)),
                                     };
+                                    println!("extern_funcs.insert_5 {:#?}", fn_key);
                                     insert_extern_func(extern_funcs, fn_key, sig);
                                 }
                                 Err(()) => (),
@@ -669,6 +674,7 @@ fn add_special_type_from_struct_shape(
                                                    // number of type arguments to the enum
 ) {
     let def_name = tcx.def_path(def_id).data.last().unwrap().data.to_string();
+    // println!("SPEC_EXT={:?}", def_name);
     match check_special_type_from_struct_shape(tcx, def) {
         SpecialTypeReturn::Array(array_typ) => {
             external_arrays.insert(def_name, array_typ);
@@ -720,6 +726,7 @@ pub fn retrieve_external_data(
     imported_crates.push(("secret_integers".to_string(), DUMMY_SP.into()));
     for krate_num in krates {
         let crate_name = tcx.crate_name(*krate_num);
+        // println!("######### CRATE_NAME={:#?}", crate_name.to_ident_string());
         if imported_crates
             .iter()
             .filter(|(imported_crate, _)| {
@@ -731,13 +738,36 @@ pub fn retrieve_external_data(
             > 0
         {
             if *krate_num != LOCAL_CRATE {
+                // println!(
+                //     "######### CRATE_NAME={:#?} [NONLOCAL]",
+                //     crate_name.to_ident_string()
+                // );
                 let num_def_ids = crate_store.num_def_ids_untracked(*krate_num);
                 let def_ids = (0..num_def_ids).into_iter().map(|id| DefId {
                     krate: *krate_num,
                     index: DefIndex::from_usize(id),
                 });
+                // if (crate_name.to_ident_string() == "hacspec_cryptolib") {
+                //     panic!("{:#?}", def_ids.collect::<Vec<_>>());
+                // }
                 for def_id in def_ids {
                     let def_path = tcx.def_path(def_id);
+                    // if (crate_name.to_ident_string() == "hacspec_cryptolib") {
+                    //     println!(
+                    //         "seeing, {:#?}, {:#?}",
+                    //         def_path.data,
+                    //         tcx.crate_name(def_path.krate).to_ident_string()
+                    //             == crate_name.to_ident_string()
+                    //     );
+                    // }
+                    // if (format!("{:#?}", def_path.data).contains("AeadAlgorithm")) {
+                    //     panic!(
+                    //         "YUP, {:#?}, {:#?}",
+                    //         def_path.data,
+                    //         tcx.crate_name(def_path.krate).to_ident_string()
+                    //             == crate_name.to_ident_string()
+                    //     );
+                    // }
                     match &def_path.data.last() {
                         Some(x) => {
                             // We only import things really defined in the crate
@@ -808,6 +838,7 @@ pub fn retrieve_external_data(
                                                             string: name.to_ident_string(),
                                                             kind: TopLevelIdentKind::Function,
                                                         });
+                                                    println!("extern_funcs.insert_0 {:#?}", fn_key);
                                                     extern_funcs.insert(fn_key, sig);
                                                 }
                                                 _ => (),
@@ -830,6 +861,14 @@ pub fn retrieve_external_data(
         let item = tcx.hir().item(item_id);
         let item_def_id = item.def_id.to_def_id();
 
+        let xxxx = tcx
+            .def_path(item_def_id)
+            .data
+            .last()
+            .unwrap()
+            .data
+            .to_string();
+        // println!("######### SADLY={:#?} [LOCAL]", xxxx);
         match &item.kind {
             ItemKind::Fn(_, _, _) | ItemKind::Const(_, _) => process_fn_id(
                 sess,

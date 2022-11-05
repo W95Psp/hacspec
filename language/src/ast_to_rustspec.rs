@@ -130,22 +130,18 @@ fn translate_type_args(
 }
 
 pub fn translate_use_path(sess: &Session, path: &ast::Path) -> TranslationResult<String> {
-    if path.segments.len() > 1 {
-        sess.span_rustspec_err(path.span, "imports are limited to the top-level glob");
-        return Err(());
-    }
-    match path.segments.iter().last() {
-        None => {
-            sess.span_rustspec_err(path.span, "empty path are not allowed in Hacspec");
-            Err(())
-        }
-        Some(segment) => match &segment.args {
+    // TODO factorize!
+    match path.segments.as_slice() {
+        [] => Err(sess.span_rustspec_err(path.span, "empty path are not allowed in Hacspec")),
+        [segment] => match &segment.args {
             None => Ok(segment.ident.name.to_ident_string()),
-            Some(_) => {
-                sess.span_rustspec_err(path.span, "imports cannot have arguments");
-                Err(())
-            }
+            Some(_) => Err(sess.span_rustspec_err(path.span, "imports cannot have arguments")),
         },
+        [fst, segment] if fst.ident.name.to_ident_string() == "crate" => match &segment.args {
+            None => Ok(segment.ident.name.to_ident_string()),
+            Some(_) => Err(sess.span_rustspec_err(path.span, "imports cannot have arguments")),
+        },
+        _ => Err(sess.span_rustspec_err(path.span, "imports are limited to the top-level glob")),
     }
 }
 
@@ -213,6 +209,8 @@ fn translate_expr_name(
     }
 }
 
+const UNANNONATED_CONSTRUCTORS_WHITELIST: [&'static str; 4] = ["Ok", "Err", "Some", "None"];
+
 pub fn translate_constructor_name(
     sess: &Session,
     path: &ast::Path,
@@ -230,21 +228,24 @@ pub fn translate_constructor_name(
                 // Here we need to discriminate between the construction of an enum variant and the construction of a struct.
                 // In the case of a struct construction, the name of the constructor is exactly the name of the struct.
                 // Thus we check wether `name` is the name of an enum or a struct.
-                if specials.enums.contains(&name) {
+                // if specials.enums.contains(&name) {
+
+                // Hacspec does not allow single-segments variant constructors.
+                // `Result` is an exception to that rule.
+                // `Placeholder` is replaced during typechecking.
+                // } else
+                if UNANNONATED_CONSTRUCTORS_WHITELIST.contains(&&*name) {
+                    Ok((BaseTyp::Placeholder, cons))
+                } else {
                     let ty_name = TopLevelIdent {
                         string: segment.ident.name.to_ident_string(),
                         kind: TopLevelIdentKind::Type,
                     };
                     let ty = (ty_name, path.span.into());
                     Ok((BaseTyp::Named(ty, None), cons))
-                // Hacspec does not allow single-segments variant constructors.
-                // `Result` is an exception to that rule.
-                // `Placeholder` is replaced during typechecking.
-                } else if name == "Ok".to_string() || name == "Err".to_string() {
-                    Ok((BaseTyp::Placeholder, cons))
-                } else {
-                    sess.span_rustspec_err(path.span, "missing type annotation");
-                    Err(())
+                    // println!("{:#?}", specials);
+                    // sess.span_rustspec_err(path.span, "missing type annotation");
+                    // Err(())
                 }
             }
             Some(_) => {
@@ -657,6 +658,9 @@ fn translate_expr(
             match func_name_kind {
                 FuncNameResult::TypePrefixed(func_prefix, func_name) => {
                     let func_name_string = (func_name.clone().0).string;
+                    // if func_name_string == "Bytes2" {
+                    //     println!("Got Bytes2. specials= {:#?}", specials);
+                    // }
                     let func_name_but_as_type = (
                         TopLevelIdent {
                             string: func_name.0.string.clone(),
@@ -673,7 +677,9 @@ fn translate_expr(
                     );
 
                     // if we're facing a un-annotated constructor (that is, `func_prefix` is `None`) in the whitelist [Ok, Err], then, we return an `EnumInject` with a type `Placeholder`
-                    if func_prefix.is_none() && ["Ok", "Err"].contains(&&*func_name_string) {
+                    if func_prefix.is_none()
+                        && UNANNONATED_CONSTRUCTORS_WHITELIST.contains(&&*func_name_string)
+                    {
                         let func_args: Vec<TranslationResult<Spanned<Expression>>> = args
                             .iter()
                             .map(|arg| translate_expr_expects_exp(sess, specials, &arg))

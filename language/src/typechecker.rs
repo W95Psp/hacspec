@@ -1886,10 +1886,15 @@ fn typecheck_pattern(
                     }
                 }
                 _ => {
+                    println!(
+                        "typ_name={:#?} => {:#?}",
+                        typ_name,
+                        top_ctx.typ_dict.get(typ_name)
+                    );
                     sess.span_rustspec_err(
                         *pat_span,
                         format!(
-                            "let-binding pattern expected a {} struct but the type is {}",
+                            "1. let-binding pattern expected a {} struct but the type is {}",
                             pat_enum_name, typ.0
                         )
                         .as_str(),
@@ -1902,7 +1907,7 @@ fn typecheck_pattern(
             sess.span_rustspec_err(
                 *pat_span,
                 format!(
-                    "let-binding pattern expected a {} struct but the type is {}",
+                    "2. let-binding pattern expected a {} struct but the type is {}",
                     name.0, typ.0
                 )
                 .as_str(),
@@ -1941,7 +1946,7 @@ fn typecheck_pattern(
             sess.span_rustspec_err(
                 *pat_span,
                 format!(
-                    "let-binding pattern expected a tuple but the type is {}",
+                    "3. let-binding pattern expected a tuple but the type is {}",
                     typ.0
                 )
                 .as_str(),
