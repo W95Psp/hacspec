@@ -444,6 +444,12 @@ let seq_get_remainder_chunk
   =
   snd (seq_get_chunk s chunk_len ((seq_num_chunks s chunk_len) - 1))
 
+let seq_get_remainder_chunk_lemma
+  (s: seq 'a)
+  (chunk_len: uint_size{chunk_len > 0})
+  : Lemma (requires chunk_len <= Seq.length s) 
+          (ensures Seq.length (seq_get_remainder_chunk s chunk_len) <= chunk_len)
+  = ()
 
 let seq_set_chunk
   (#a: Type)
