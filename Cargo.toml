@@ -4,6 +4,7 @@ members = [
     "provider",
     "utils/dev",
     "utils/derive",
+    "utils/enum-default",
     "utils/evercrypt-provider",
     "utils/secret-integers",
     "utils/abstract-integers",
@@ -11,20 +12,8 @@ members = [
     "utils/rc-bench",
     "utils/rc-tests",
     "utils/util",
-    "language",
-    "examples/curve25519",
-    "examples/chacha20",
-    "examples/poly1305",
-    "examples/chacha20poly1305",
-    "examples/gimli",
-    "examples/sha256",
-    "examples/sha3",
-    "examples/ntru-prime",
     "examples-unsafe",
-    "examples/riot-bootloader",
-    "examples/hmac",
-    "examples/hkdf",
-    "examples/p256",
+    "no_std",
 ]
 default-members = [
     "lib",
@@ -35,20 +24,6 @@ default-members = [
     "utils/abstract-integers",
     "utils/attributes",
     "utils/util",
-    "examples/curve25519",
-    "examples/chacha20",
-    "examples/poly1305",
-    "examples/chacha20poly1305",
-    "examples/gimli",
-    "examples/sha256",
-    "examples/sha3",
-    "examples/ntru-prime",
     "examples-unsafe",
-    "examples/riot-bootloader",
-    "examples/hmac",
-    "examples/hkdf",
-    "examples/p256",
 ]
-
-[profile.release]
-debug = true
+exclude = [ "language" , "examples" ]

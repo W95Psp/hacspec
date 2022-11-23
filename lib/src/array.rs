@@ -59,15 +59,10 @@ macro_rules! _array_base {
         }
 
         impl $name {
-            #[cfg_attr(feature = "use_attributes", not_hacspec($name))]
-            pub fn capacity() -> usize {
-                $l
-            }
-
             #[cfg_attr(feature = "use_attributes", in_hacspec($name))]
             pub fn from_slice<A: SeqTrait<$t>>(input: &A, start: usize, len: usize) -> Self {
                 let mut a = Self::new();
-                debug_assert!(len <= a.len());
+                debug_assert!(len <= a.len(), "{} > {}", len, a.len());
                 a = a.update_slice(0, input, start, len);
                 a
             }
@@ -155,7 +150,7 @@ macro_rules! _array_base {
                 $l
             }
             #[cfg_attr(feature = "use_attributes", not_hacspec($name))]
-            fn iter(&self) -> std::slice::Iter<$t> {
+            fn iter(&self) -> core::slice::Iter<$t> {
                 self.0.iter()
             }
 
@@ -274,7 +269,7 @@ macro_rules! _array_base {
 
         impl $name {
             fn hex_string_to_vec(s: &str) -> Vec<$t> {
-                debug_assert!(s.len() % std::mem::size_of::<$t>() == 0);
+                debug_assert!(s.len() % core::mem::size_of::<$t>() == 0);
                 let b: Result<Vec<$t>, ParseIntError> = (0..s.len())
                     .step_by(2)
                     .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map(<$t>::from))
@@ -336,11 +331,6 @@ macro_rules! generic_array {
         }
 
         impl<T: Numeric + Copy> $name<T> {
-            #[cfg_attr(feature = "use_attributes", not_hacspec($name))]
-            pub fn capacity() -> usize {
-                $l
-            }
-
             #[cfg_attr(feature = "use_attributes", in_hacspec($name))]
             pub fn from_slice<A: SeqTrait<T>>(input: &A, start: usize, len: usize) -> Self {
                 let mut a = Self::new();
@@ -432,7 +422,7 @@ macro_rules! generic_array {
                 $l
             }
             #[cfg_attr(feature = "use_attributes", not_hacspec($name))]
-            fn iter(&self) -> std::slice::Iter<T> {
+            fn iter(&self) -> core::slice::Iter<T> {
                 self.0.iter()
             }
 
@@ -633,6 +623,15 @@ macro_rules! _secret_array {
                 )
             }
 
+            #[cfg_attr(feature = "use_attributes", not_hacspec($name))]
+            pub fn to_public_array(&self) -> [$tbase; $l] {
+                let mut out = [0; $l];
+                for (x, o) in self.0.iter().zip(out.iter_mut()) {
+                    *o = <$t>::declassify(*x);
+                }
+                out
+            }
+
             /// Create an array from a regular Rust array.
             ///
             /// # Examples
@@ -662,6 +661,21 @@ macro_rules! _secret_array {
 macro_rules! _public_array {
     ($name:ident,$l:expr,$t:ty) => {
         _array_base!($name, $l, $t);
+
+        impl $name {
+            #[cfg_attr(feature = "use_attributes", unsafe_hacspec($name))]
+            pub fn into_le_bytes(self) -> Seq<u8> {
+                const FACTOR: usize = core::mem::size_of::<$t>();
+                let mut out: Seq<u8> = Seq::new($l * FACTOR);
+                for i in 0..$l {
+                    let tmp = <$t>::to_le_bytes(self[i]);
+                    for j in 0..FACTOR {
+                        out[i * FACTOR + j] = tmp[j];
+                    }
+                }
+                out
+            }
+        }
 
         impl fmt::Debug for $name {
             #[cfg_attr(feature = "use_attributes", not_hacspec($name))]

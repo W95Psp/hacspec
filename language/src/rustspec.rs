@@ -2,19 +2,88 @@ use core::cmp::PartialEq;
 use core::hash::Hash;
 use im::HashSet;
 use itertools::Itertools;
-use rustc_ast::ast::BinOpKind;
+use rustc_errors::MultiSpan;
 use rustc_span::Span;
+use serde::{ser::SerializeSeq, Serialize, Serializer};
 use std::fmt;
 
-pub type Spanned<T> = (T, Span);
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug, Copy)]
+pub struct RustspecSpan(pub Span);
 
-#[derive(Clone, Hash, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct HacspecId(pub usize);
+impl Serialize for RustspecSpan {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(format!("{:?}", self.0).as_str())
+    }
+}
 
-#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub type Spanned<T> = (T, RustspecSpan);
+
+impl From<RustspecSpan> for MultiSpan {
+    fn from(x: RustspecSpan) -> MultiSpan {
+        x.0.into()
+    }
+}
+
+impl From<Span> for RustspecSpan {
+    fn from(x: Span) -> RustspecSpan {
+        RustspecSpan(x)
+    }
+}
+
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct LocalIdent {
+    pub id: usize,
+    pub name: String,
+    pub mutable: bool,
+}
+
+impl fmt::Display for LocalIdent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}_{}", self.name, self.id)
+    }
+}
+
+impl fmt::Debug for LocalIdent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Debug)]
+pub enum TopLevelIdentKind {
+    Type,
+    Function,
+    Constant,
+    Crate,
+    EnumConstructor,
+}
+
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct TopLevelIdent {
+    pub string: String,
+    pub kind: TopLevelIdentKind,
+}
+
+impl fmt::Display for TopLevelIdent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.string)
+    }
+}
+
+impl fmt::Debug for TopLevelIdent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum Ident {
-    Original(String),
-    Hacspec(HacspecId, String),
+    Unresolved(String),
+    Local(LocalIdent),
+    TopLevel(TopLevelIdent),
 }
 
 impl fmt::Display for Ident {
@@ -23,8 +92,9 @@ impl fmt::Display for Ident {
             f,
             "{}",
             match self {
-                Ident::Original(n) => n.clone(),
-                Ident::Hacspec(x, n) => format!("{}_{}", n, x.0),
+                Ident::Unresolved(n) => n.clone(),
+                Ident::Local(n) => format!("{}", n),
+                Ident::TopLevel(n) => format!("{}", n),
             }
         )
     }
@@ -36,9 +106,23 @@ impl fmt::Debug for Ident {
     }
 }
 
-pub type VarSet = HashSet<Ident>;
+#[derive(Clone, Hash, PartialEq, Eq, Debug)]
+pub struct VarSet(pub HashSet<LocalIdent>);
 
-#[derive(Clone, Hash, PartialEq, Eq)]
+impl Serialize for VarSet {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
+        for e in &self.0 {
+            seq.serialize_element(e)?;
+        }
+        seq.end()
+    }
+}
+
+#[derive(Clone, Hash, PartialEq, Eq, Serialize)]
 pub enum Borrowing {
     Borrowed,
     Consumed,
@@ -63,21 +147,35 @@ impl fmt::Debug for Borrowing {
     }
 }
 
-#[derive(Clone, Hash, PartialEq, Eq, Debug)]
+#[derive(Clone, Hash, PartialEq, Eq, Debug, Serialize)]
 pub enum ArraySize {
     Integer(usize),
-    Ident(String),
+    Ident(TopLevelIdent),
 }
 
-#[derive(Clone, Hash, PartialEq, Eq, Debug)]
+#[derive(Clone, Hash, PartialEq, Eq, Debug, Serialize)]
 pub enum Secrecy {
     Secret,
     Public,
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq, Serialize)]
+pub struct TypVar(pub usize);
+
+impl fmt::Display for TypVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "T[{}]", self.0)
+    }
+}
+
+impl fmt::Debug for TypVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+#[derive(Clone, Hash, PartialEq, Eq, Serialize, Debug)]
 pub enum BaseTyp {
-    Unit,
     Bool,
     UInt128,
     Int128,
@@ -94,16 +192,22 @@ pub enum BaseTyp {
     Str,
     Seq(Box<Spanned<BaseTyp>>),
     Array(Spanned<ArraySize>, Box<Spanned<BaseTyp>>),
-    Named(Spanned<Ident>, Option<Vec<Spanned<BaseTyp>>>),
-    Variable(HacspecId),
+    Named(Spanned<TopLevelIdent>, Option<Vec<Spanned<BaseTyp>>>),
+    Variable(TypVar),
     Tuple(Vec<Spanned<BaseTyp>>),
+    Enum(
+        Vec<(Spanned<TopLevelIdent>, Option<Spanned<BaseTyp>>)>,
+        Vec<TypVar>,
+    ), // Cases, type variables
     NaturalInteger(Secrecy, Spanned<String>, Spanned<usize>), // secrecy, modulo value, encoding bits
+    Placeholder,
 }
+
+pub const UnitTyp: BaseTyp = BaseTyp::Tuple(vec![]);
 
 impl fmt::Display for BaseTyp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            BaseTyp::Unit => write!(f, "unit"),
             BaseTyp::Bool => write!(f, "bool"),
             BaseTyp::UInt128 => write!(f, "u128"),
             BaseTyp::Int128 => write!(f, "i128"),
@@ -140,23 +244,34 @@ impl fmt::Display for BaseTyp {
                 "({})",
                 args.iter().map(|(arg, _)| format!("{}", arg)).format(", ")
             ),
+            BaseTyp::Enum(args, _) => write!(
+                f,
+                "[{}]",
+                args.iter()
+                    .map(|((case, _), payload)| match payload {
+                        Some((payload, _)) => format!("{}: {}", case, payload),
+                        None => format!("{}", case),
+                    })
+                    .format(" | ")
+            ),
             BaseTyp::Variable(id) => write!(f, "T[{}]", id.0),
             BaseTyp::NaturalInteger(sec, modulo, bits) => {
                 write!(f, "nat[{:?}][modulo {}][bits {}]", sec, modulo.0, bits.0)
             }
+            BaseTyp::Placeholder => write!(f, "_"),
         }
     }
 }
 
-impl fmt::Debug for BaseTyp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self)
-    }
-}
+// impl fmt::Debug for BaseTyp {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         write!(f, "{}", self)
+//     }
+// }
 
 pub type Typ = (Spanned<Borrowing>, Spanned<BaseTyp>);
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Debug)]
 pub enum Literal {
     Unit,
     Bool(bool),
@@ -172,16 +287,72 @@ pub enum Literal {
     UInt8(u8),
     Usize(usize),
     Isize(isize),
+    UnspecifiedInt(u128),
     Str(String),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Debug)]
 pub enum UnOpKind {
     Not,
     Neg,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug, Serialize)]
+pub enum BinOpKind {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    And,
+    Or,
+    BitXor,
+    BitAnd,
+    BitOr,
+    Shl,
+    Shr,
+    Eq,
+    Lt,
+    Le,
+    Ne,
+    Ge,
+    Gt,
+}
+
+/// Enumeration of the types allowed as question marks's monad
+/// representation. Named after the [Carrier][std::ops::Carrier]
+/// trait.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize)]
+pub enum CarrierTyp {
+    Result(Spanned<BaseTyp>, Spanned<BaseTyp>),
+    Option(Spanned<BaseTyp>),
+}
+
+/// Extracts the payload type of a carrier type, i.e., `A` is the
+/// payload type of `Either<A, B>`.
+pub fn carrier_payload(carrier: CarrierTyp) -> Spanned<BaseTyp> {
+    match carrier {
+        CarrierTyp::Result(ok, ..) | CarrierTyp::Option(ok, ..) => ok,
+    }
+}
+pub fn carrier_kind(carrier: CarrierTyp) -> EarlyReturnType {
+    match carrier {
+        CarrierTyp::Result(..) => EarlyReturnType::Result,
+        CarrierTyp::Option(..) => EarlyReturnType::Option,
+    }
+}
+
+#[derive(Clone, Serialize, Debug, Copy)]
+/// Rust has three styles of structs: (a) unit structs, (b) classic,
+/// named structs (c) tuple structs. A field is thus either a numeric
+/// index or a name. However, Hacspec allows only for (a) or (c),
+/// hence the constructor `Named` being commented out below.
+pub enum Field {
+    // Named(String),
+    TupleIndex(isize),
+}
+
+#[derive(Clone, Serialize, Debug)]
 pub enum Expression {
     Unary(UnOpKind, Box<Spanned<Expression>>, Option<Typ>),
     Binary(
@@ -195,22 +366,64 @@ pub enum Expression {
         Box<Spanned<Expression>>,
         Box<Spanned<Expression>>,
     ),
+    QuestionMark(
+        Box<Spanned<Expression>>,
+        Fillable<CarrierTyp>, // Filled by typechecking phase
+    ),
+    /// One or multiple monadic bindings. For instance, `MonadicLet(M, [(x₀, e₀), …, (xₙ, eₙ)], «f x₀ … xₙ», true)` represents:
+    /// ```haskell
+    /// do x₀ <- e₀
+    ///    …
+    ///    xₙ <- eₙ
+    ///    return $ f x₀ … xₙ
+    /// ```
+    /// Note the boolean flag indicates whether we shall insert a `pure` monadic operation or not (that is, above, shall we have `return $ f x₀ … xₙ` or simply `f x₀ … xₙ`).
+    /// This node appears only after the [question marks elimination][desugar::eliminate_question_marks_in_expressions] phase.
+    MonadicLet(
+        CarrierTyp,                             // Are we dealing with `Result` or `Option`?
+        Vec<(Ident, Box<Spanned<Expression>>)>, // List of "monadic" bindings
+        Box<Spanned<Expression>>,               // body
+        bool, // should we insert a `pure` node? (`pure` being e.g. `Ok`)
+    ),
     Named(Ident),
-    // FuncCall(prefix, name, args)
+    // FuncCall(prefix, name, args, arg_types)
     FuncCall(
         Option<Spanned<BaseTyp>>,
-        Spanned<Ident>,
+        Spanned<TopLevelIdent>,
         Vec<(Spanned<Expression>, Spanned<Borrowing>)>,
+        Fillable<Vec<BaseTyp>>,
     ),
     MethodCall(
         Box<(Spanned<Expression>, Spanned<Borrowing>)>,
         Option<Typ>, // Type of self, to be filled by the typechecker
-        Spanned<Ident>,
+        Spanned<TopLevelIdent>,
         Vec<(Spanned<Expression>, Spanned<Borrowing>)>,
+        Fillable<Vec<BaseTyp>>,
     ),
+    EnumInject(
+        BaseTyp,                          // Type of enum
+        Spanned<TopLevelIdent>,           // Name of case
+        Option<Spanned<Box<Expression>>>, // Payload of case
+    ),
+    MatchWith(
+        Box<Spanned<Expression>>, // Expression to match
+        Vec<(
+            Spanned<Pattern>,    // Payload of case
+            Spanned<Expression>, // Match arm expression
+        )>,
+    ),
+    FieldAccessor(Box<Spanned<Expression>>, Box<Spanned<Field>>),
     Lit(Literal),
-    ArrayIndex(Spanned<Ident>, Box<Spanned<Expression>>),
-    NewArray(Spanned<Ident>, Option<BaseTyp>, Vec<Spanned<Expression>>),
+    ArrayIndex(
+        Spanned<Ident>,           // Array variable
+        Box<Spanned<Expression>>, // Index
+        Fillable<Typ>,            // Type of the array
+    ),
+    NewArray(
+        Option<Spanned<TopLevelIdent>>, // Name of array type, None if Seq
+        Option<BaseTyp>,                // Type of cells
+        Vec<Spanned<Expression>>,       // Contents
+    ),
     Tuple(Vec<Spanned<Expression>>),
     IntegerCasting(
         Box<Spanned<Expression>>, //expression to cast
@@ -219,86 +432,224 @@ pub enum Expression {
     ),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Debug)]
 pub enum Pattern {
-    IdentPat(Ident),
+    IdentPat(Ident, bool),
     WildCard,
+    LiteralPat(Literal),
     Tuple(Vec<Spanned<Pattern>>),
+    EnumCase(
+        BaseTyp,
+        Spanned<TopLevelIdent>,
+        Option<Box<Spanned<Pattern>>>,
+    ),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Debug, PartialEq, Eq)]
+pub enum EarlyReturnType {
+    Option,
+    Result,
+}
+
+#[derive(Clone, Serialize, Debug)]
 pub struct MutatedInfo {
+    pub early_return_type: Fillable<CarrierTyp>,
     pub vars: VarSet,
     pub stmt: Statement,
 }
 
 pub type Fillable<T> = Option<T>;
 
-#[derive(Clone)]
+pub type QuestionMarkInfo = Option<(ScopeMutableVars, FunctionDependencies, Fillable<CarrierTyp>)>;
+
+#[derive(Clone, Serialize, Debug)]
 pub enum Statement {
-    LetBinding(Spanned<Pattern>, Option<Spanned<Typ>>, Spanned<Expression>),
-    Reassignment(Spanned<Ident>, Spanned<Expression>),
+    LetBinding(
+        Spanned<Pattern>,     // Let-binded pattern
+        Option<Spanned<Typ>>, // Typ of the binded expr
+        Spanned<Expression>,  // Binded expr
+        QuestionMarkInfo,     // Presence of a question mark at the end
+    ),
+    Reassignment(
+        Spanned<Ident>,         // Variable reassigned
+        Fillable<Spanned<Typ>>, // Type of variable reassigned
+        Spanned<Expression>,    // New value
+        QuestionMarkInfo,       // Presence of a question mark at the end
+    ),
     Conditional(
-        Spanned<Expression>,
-        Spanned<Block>,
-        Option<Spanned<Block>>,
-        Fillable<Box<MutatedInfo>>,
+        Spanned<Expression>,        // Condition
+        Spanned<Block>,             // Then block
+        Option<Spanned<Block>>,     // Else block
+        Fillable<Box<MutatedInfo>>, // Variables mutated in either branch
     ),
     ForLoop(
-        Spanned<Ident>,
-        Spanned<Expression>,
-        Spanned<Expression>,
-        Spanned<Block>,
+        Option<Spanned<Ident>>, // Loop variable
+        Spanned<Expression>,    // Lower bound
+        Spanned<Expression>,    // Upper bound
+        Spanned<Block>,         // Loop body
     ),
-    ArrayUpdate(Spanned<Ident>, Spanned<Expression>, Spanned<Expression>),
-    ReturnExp(Expression),
+    ArrayUpdate(
+        Spanned<Ident>,      // Array variable
+        Spanned<Expression>, // Index value
+        Spanned<Expression>, // Cell value
+        QuestionMarkInfo,    // Presence of a question mark at the end of the cell value expression
+        Fillable<Typ>,       // Type of the array
+    ),
+    ReturnExp(Expression, Fillable<Typ>),
 }
 
-#[derive(Clone)]
+pub type MutableVar = (Ident, Fillable<Typ>);
+#[derive(Clone, Debug)]
+pub struct ScopeMutableVars {
+    pub external_vars: HashSet<MutableVar>,
+    pub local_vars: HashSet<MutableVar>,
+}
+
+impl Serialize for ScopeMutableVars {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // TODO: Serialize local vars
+        let mut seq = serializer.serialize_seq(Some(self.external_vars.len()))?;
+        for e in &self.external_vars {
+            seq.serialize_element(e)?;
+        }
+        seq.end()
+    }
+}
+
+impl ScopeMutableVars {
+    pub fn new() -> Self {
+        ScopeMutableVars {
+            external_vars: HashSet::new(),
+            local_vars: HashSet::new(),
+        }
+    }
+
+    pub fn push(&mut self, value: MutableVar) {
+        self.local_vars.insert(value);
+    }
+
+    pub fn push_external(&mut self, value: MutableVar) {
+        self.external_vars.insert(value);
+    }
+
+    pub fn extend(&mut self, other: ScopeMutableVars) {
+        for i in other.external_vars {
+            self.external_vars.insert(i);
+        }
+        for i in other.local_vars {
+            self.local_vars.insert(i);
+        }
+    }
+}
+
+pub type FunctionDependency = TopLevelIdent;
+
+#[derive(Clone, Debug)]
+pub struct FunctionDependencies(pub HashSet<FunctionDependency>);
+
+impl Serialize for FunctionDependencies {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
+        for e in &self.0 {
+            seq.serialize_element(e)?;
+        }
+        seq.end()
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct Block {
     pub stmts: Vec<Spanned<Statement>>,
     pub mutated: Fillable<Box<MutatedInfo>>,
     pub return_typ: Fillable<Typ>,
+    pub contains_question_mark: Fillable<bool>,
+    pub mutable_vars: ScopeMutableVars,
+    pub function_dependencies: FunctionDependencies,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct FuncSig {
     pub args: Vec<(Spanned<Ident>, Spanned<Typ>)>,
     pub ret: Spanned<BaseTyp>,
+    pub mutable_vars: ScopeMutableVars,
+    pub function_dependencies: FunctionDependencies,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ExternalFuncSig {
     pub args: Vec<Typ>,
     pub ret: BaseTyp,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Debug)]
 pub enum Item {
-    FnDecl(Spanned<Ident>, FuncSig, Spanned<Block>),
+    FnDecl(Spanned<TopLevelIdent>, FuncSig, Spanned<Block>),
+    EnumDecl(
+        Spanned<TopLevelIdent>,
+        Vec<(Spanned<TopLevelIdent>, Option<Spanned<BaseTyp>>)>,
+    ),
     ArrayDecl(
-        Spanned<Ident>,         // Name of the array type
-        Spanned<Expression>,    // Length
-        Spanned<BaseTyp>,       // Cell type
-        Option<Spanned<Ident>>, // Optional type alias for indexes
+        Spanned<TopLevelIdent>,         // Name of the array type
+        Spanned<Expression>,            // Length
+        Spanned<BaseTyp>,               // Cell type
+        Option<Spanned<TopLevelIdent>>, // Optional type alias for indexes
     ),
-    ConstDecl(Spanned<Ident>, Spanned<BaseTyp>, Spanned<Expression>),
+    AliasDecl(Spanned<TopLevelIdent>, Spanned<BaseTyp>),
+    ImportedCrate(Spanned<TopLevelIdent>),
+    ConstDecl(
+        Spanned<TopLevelIdent>,
+        Spanned<BaseTyp>,
+        Spanned<Expression>,
+    ),
     NaturalIntegerDecl(
-        Spanned<Ident>, // Element type name
-        Spanned<Ident>, // Canvas array type name
-        Secrecy,
-        Spanned<Expression>, // Canvas size
-        Spanned<String>,     // Modulo value
-    ),
-    SimplifiedNaturalIntegerDecl(
-        Spanned<Ident>, // Element type name
-        Secrecy,
-        Spanned<Expression>, // If x, then modulo value is 2^x
+        Spanned<TopLevelIdent>,                            // Element type name
+        Secrecy,                                           // Public or secret
+        Spanned<Expression>,                               // Canvas size
+        Option<(Spanned<TopLevelIdent>, Spanned<String>)>, // Canvas array type name and modulo value
     ),
 }
 
+pub type ItemTag = String;
+
+#[derive(Clone, Hash, PartialEq, Eq, Debug)]
+pub struct ItemTagSet(pub HashSet<ItemTag>);
+
+impl Serialize for ItemTagSet {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
+        for e in &self.0 {
+            seq.serialize_element(e)?;
+        }
+        seq.end()
+    }
+}
+
+#[derive(Clone, Serialize, Debug)]
+pub struct DecoratedItem {
+    pub item: Item,
+    pub tags: ItemTagSet,
+}
+
+#[derive(Clone, Serialize, Debug)]
 pub struct Program {
-    pub items: Vec<Spanned<Item>>,
-    pub imported_crates: Vec<Spanned<String>>,
-    pub ty_aliases: Vec<(Spanned<String>, Spanned<BaseTyp>)>,
+    pub items: Vec<Spanned<DecoratedItem>>,
+}
+
+// Helpers
+
+#[allow(non_snake_case)]
+pub fn U8_TYP() -> TopLevelIdent {
+    TopLevelIdent {
+        string: "U8".into(),
+        kind: TopLevelIdentKind::Type,
+    }
 }

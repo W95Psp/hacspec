@@ -9,6 +9,12 @@ path = "src/curve25519.rs"
 
 [dependencies]
 hacspec-lib = { path = "../../lib" }
-hacspec-derive = { path = "../../utils/derive" }
-secret_integers = { path = "../../utils/secret-integers" }
-abstract_integers = { path = "../../utils/abstract-integers" }
+
+[dev-dependencies]
+hacspec-dev = { path = "../../utils/dev" }
+criterion = "0.4"
+rand = "0.8"
+
+[[bench]]
+name = "benchmarks"
+harness = false

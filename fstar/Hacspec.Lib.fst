@@ -87,8 +87,36 @@ let usize_shift_right (u: uint_size) (s: pub_uint32{v s < 32}) : uint_size =
 let usize_shift_left (u: uint_size) (s: pub_uint32{v s < 32}) : uint_size =
   v (shift_left (size u) s)
 
+let usize_bit_and (u: uint_size) (s: uint_size) : uint_size =
+  v ((size u) &. (size s))
+
 let pub_uint128_wrapping_add (x y: pub_uint128) : pub_uint128 =
   x +. y
+
+let pub_uint32_leading_zeros (x: pub_uint32) : pub_uint32 =
+  admit()
+
+let pub_uint32_clone(x: pub_uint32) : pub_uint32 =
+  x
+
+(*** Option *)
+
+let option_unwrap (#a: Type) (x: option a{Some? x}) : a =
+  Some?.v x
+
+
+(*** Result *)
+
+type result (a: Type) (b: Type) =
+  | Ok : a -> result a b
+  | Err : b -> result a b
+
+let bind_ok (#a #a' #b: Type) (v: result a b) (kont: a -> result a' b) : result a' b =
+   match v with
+   | Ok x -> kont x
+   | Err y -> Err y
+
+let (let?) = bind_ok
 
 (*** Loops *)
 
@@ -152,6 +180,31 @@ let foldi
   =
   Lib.LoopCombinators.repeat_range lo hi f init
 
+let rec foldi_result_
+  (#acc_ok: Type)
+  (#err: Type)
+  (cur_i: uint_size)
+  (hi: uint_size{cur_i <= hi})
+  (f: (i:uint_size{i < hi}) -> acc_ok -> (result acc_ok err))
+  (cur: acc_ok)
+    : Tot (result acc_ok err) (decreases (hi - cur_i))
+  =
+  if cur_i = hi then Ok cur else
+  match f cur_i cur with
+  | Err x -> Err x
+  | Ok y -> foldi_result_ (cur_i + 1) hi f y
+
+let foldi_result
+  (#acc_ok: Type)
+  (#err: Type)
+  (lo: uint_size)
+  (hi: uint_size{lo <= hi})
+  (f: (i:uint_size{i < hi}) -> acc_ok -> (result acc_ok err))
+  (init: acc_ok)
+    : result acc_ok err
+  =
+  foldi_result_ lo hi f init
+
 (*** Seq *)
 
 module LSeq = Lib.Sequence
@@ -170,6 +223,31 @@ let seq_len (#a: Type) (s: seq a) : nat = Seq.length s
 let seq_new_ (#a: Type) (init:a) (len: uint_size) : lseq a len =
   Seq.create len init
 
+let seq_clone (#a: Type) (s: seq a) : seq a = s
+
+let seq_index (#a: Type) (s: seq a) (i: uint_size{i < seq_len s}) : a =
+  Seq.index s i
+
+let seq_upd (#a: Type) (s: seq a) (i: uint_size{i < seq_len s}) (new_v: a)
+    : (s':seq a{seq_len s' = seq_len s})  =
+  Seq.upd s i new_v
+
+let seq_update_start
+  (#a: Type)
+  (s: seq a)
+  (start_s: seq a{Seq.length start_s <= Seq.length s})
+    : seq a
+  =
+  LSeq.update_sub #_ #(Seq.length s) s 0 (Seq.length start_s) start_s
+
+let seq_from_seq (#a: Type) (s: seq a) : seq a = s
+
+
+(**** Array manipulation *)
+
+let array_new_ (#a: Type) (init:a) (len: uint_size)  : lseq a len =
+  LSeq.create len init
+
 let array_from_list
   (#a: Type)
   (l: list a{List.Tot.length l <= max_size_t})
@@ -179,16 +257,6 @@ let array_from_list
 
 (**** Array manipulation *)
 
-(* temp *)
-let array_to_le_uint32s (s:seq uint8{4 * seq_len s < pow2 32 /\ seq_len s % 4 = 0}) : seq uint32 =
-    let ulen : size_nat = seq_len s / 4 in
-    let s : lseq uint8 (4*ulen) = LSeq.to_lseq s in
-    Lib.ByteSequence.uints_from_bytes_le #U32 #SEC #ulen s
-
-let array_to_le_bytes (#len:size_nat{len * 4 < pow2 32}) (s:lseq uint32 len) =
-    Lib.ByteSequence.uints_to_bytes_le #U32 #SEC #len s
-
-(* temp end *)
 
 let array_new_ (#a: Type) (init:a) (len: uint_size)  : lseq a len =
   LSeq.create len init
@@ -206,6 +274,16 @@ let array_from_seq
   (input: seq a{Seq.length input = out_len})
     : lseq a out_len
   = input
+
+let array_update
+  (#a: Type)
+  (#len: uint_size)
+  (s: lseq a len)
+  (start: uint_size)
+  (input: seq a {start + Seq.length input <= len})
+    : lseq a len
+  =
+  LSeq.update_sub #a #(LSeq.length s) s start (LSeq.length input) input
 
 let array_from_slice
   (#a: Type)
@@ -276,6 +354,40 @@ let array_update
 
 let array_len  (#a: Type) (#len: uint_size) (s: lseq a len) = len
 
+
+//TODO
+let array_to_le_uint32s (s:seq uint8{4 * seq_len s < pow2 32 /\ seq_len s % 4 = 0}) : seq uint32 =
+    let ulen : size_nat = seq_len s / 4 in
+    let s : lseq uint8 (4*ulen) = LSeq.to_lseq s in
+    Lib.ByteSequence.uints_from_bytes_le #U32 #SEC #ulen s
+let array_to_le_uint32s (#len: uint_size) (s: lseq uint8 len{len % 4 = 0}) : lseq uint32 (len / 4) =
+  admit()
+
+let array_to_be_uint32s (#len: uint_size) (s: lseq uint8 len{len % 4 = 0}) : lseq uint32 (len / 4) =
+  admit()
+
+let array_to_le_bytes
+  (#int_ty: inttype{unsigned int_ty /\ int_ty <> U1})
+  (#len: uint_size{
+    range (len * (match int_ty with U8 -> 1 | U16 -> 2  | U32 -> 4 | U64 -> 8 | U128 -> 16)) U32
+  })
+  (s: lseq (uint_t int_ty SEC) len)
+    : lseq uint8 (len * (match int_ty with U8 -> 1 | U16 -> 2  | U32 -> 4 | U64 -> 8 | U128 -> 16))
+  = Lib.ByteSequence.uints_to_bytes_le #U32 #SEC #len s
+
+let array_to_be_bytes
+  (#int_ty: inttype{unsigned int_ty /\ int_ty <> U1})
+  (#len: uint_size{
+    range (len * (match int_ty with U8 -> 1 | U16 -> 2  | U32 -> 4 | U64 -> 8 | U128 -> 16)) U32
+  })
+  (s: lseq (uint_t int_ty SEC) len)
+    : lseq uint8 (len * (match int_ty with U8 -> 1 | U16 -> 2  | U32 -> 4 | U64 -> 8 | U128 -> 16))
+  =
+  admit()
+
+let array_declassify_eq (#a: eqtype) (#len: uint_size) (x y: lseq a len) : bool =
+  Seq.Properties.for_all (fun (x, y) -> x = y) (Lib.Sequence.map2 (fun x y -> (x,y)) x y)
+
 (**** Seq manipulation *)
 
 let seq_slice
@@ -325,6 +437,13 @@ let seq_concat
 let seq_num_chunks (#a: Type) (s: seq a) (chunk_len: uint_size{chunk_len > 0}) : uint_size =
   (Seq.length s + chunk_len - 1) / chunk_len
 
+let seq_num_exact_chunks
+  (#a: Type)
+  (s: seq a)
+  (chunk_len: uint_size{chunk_len > 0})
+    : uint_size =
+  Seq.length s / chunk_len
+
 let seq_chunk_len
   (#a: Type)
   (s: seq a)
@@ -366,6 +485,28 @@ let seq_get_chunk
   (out_len, LSeq.slice #a #(Seq.length s)
     s idx_start (idx_start + seq_chunk_len s chunk_len chunk_num))
 
+let seq_get_exact_chunk
+  (#a: Type)
+  (s: seq a)
+  (chunk_len: uint_size)
+  (chunk_num: uint_size)
+  : Pure (lseq a chunk_len)
+    (requires (chunk_len * (chunk_num + 1) <= Seq.length s))
+    (ensures (fun chunk -> True))
+  =
+  snd (seq_get_chunk s chunk_len chunk_num)
+
+let seq_get_remainder_chunk
+  (#a: Type)
+  (s: seq a)
+  (chunk_len: uint_size{chunk_len > 0})
+  : Pure (seq a)
+    (requires (chunk_len <= Seq.length s))
+    (ensures (fun chunk -> True))
+  =
+  snd (seq_get_chunk s chunk_len ((seq_num_chunks s chunk_len) - 1))
+
+
 let seq_set_chunk
   (#a: Type)
   (#len:uint_size) (* change to nseq but update_sub missing for nseq *)
@@ -383,6 +524,23 @@ let seq_set_chunk
   let idx_start = chunk_len * chunk_num in
   let out_len = seq_chunk_len s chunk_len chunk_num in
   LSeq.update_sub s idx_start out_len chunk
+
+let seq_set_exact_chunk
+  (#a: Type)
+  (#len:uint_size) (* change to nseq but update_sub missing for nseq *)
+  (s: lseq a len)
+  (chunk_len: uint_size)
+  (chunk_num: uint_size)
+  (chunk: seq a )
+    : Pure (lseq a len)
+      (requires (
+        chunk_len * (chunk_num + 1) <= Seq.length s /\
+        LSeq.length chunk = seq_chunk_len s chunk_len chunk_num
+      ))
+      (ensures (fun out -> True))
+  =
+  seq_set_chunk s chunk_len chunk_num chunk
+
 
 (**** Numeric operations *)
 
@@ -406,6 +564,19 @@ let array_xor
     : lseq a len
   =
   LSeq.map2 xor s1 s2
+
+let array_add
+  (#a: Type)
+  (#len: uint_size)
+  (add: a -> a -> a)
+  (s1: lseq a len)
+  (s2 : lseq a len)
+    : lseq a len
+  =
+  let out = s1 in
+  foldi 0 len (fun i out ->
+    array_upd out i (array_index s1 i `add` array_index s2 i)
+  ) out
 
 let array_eq
   (#a: Type)
@@ -519,6 +690,23 @@ let u128_from_le_bytes (input: lseq pub_uint8 16) : pub_uint128 =
 let u128_from_be_bytes (s: lseq pub_uint8 16) : pub_uint128 =
   LBSeq.uint_from_bytes_be s
 
+(**** Casting *)
+
+let uint32_from_uint8 (x: uint8) : uint32 = cast U32 SEC x
+
+let uint64_from_uint8 (x: uint8) : uint64 = cast U64 SEC x
+
+let uint8_from_uint64 (x: uint64) : uint8 = cast U8 SEC x
+
+
+(**** Declassification *)
+
+let uint32_declassify (x: uint32) : pub_uint32 = uint (Lib.RawIntTypes.uint_to_nat x)
+
+(**** Classification *)
+
+let uint64_classify (x: pub_uint64) : uint64 = uint (Lib.RawIntTypes.uint_to_nat x)
+
 (*** Nats *)
 
 let less_eq (x:nat) (y:nat) = x <= y
@@ -528,15 +716,50 @@ let nat_mod (n: pos) = x:nat{x `less_eq` (n - 1)}
 val (+%) (#n:pos) (a:nat_mod n) (b:nat_mod n) : nat_mod n
 let (+%) #n a b = (a + b) % n
 
+val (-%) (#n:pos) (a:nat_mod n) (b:nat_mod n) : nat_mod n
+let (-%) #n a b = (a - b) % n
+
+
 val ( *% ) (#n:pos) (a:nat_mod n) (b:nat_mod n) : nat_mod n
 let ( *% ) #n a b = (a * b) % n
 
-let nat_zero (m:pos) : n:nat_mod m{n == 0} = 0
+let nat_exp (m: pos) (n: nat_mod m) (exponent: pub_uint32) : nat_mod m =
+  admit()
+
+let nat_inv (m: pos) (n: nat_mod m) : nat_mod m =
+  admit()
+
+let nat_one (m: pos) : nat_mod m = 1 % m
+
+let nat_pow2 (m:pos) (x: nat{pow2 x < m}) : nat_mod m = pow2 x
+
+let nat_pow (m: pos) (x: nat_mod m) (exponent: pub_uint128) : nat_mod m =
+  admit()
+
+let nat_zero (m: pos) : nat_mod m = 0
+
+
+let nat_equal (m: pos) (n n': nat_mod m) : bool = n = n'
+
+let nat_get_bit (m: pos) (n: nat_mod m) (bit: uint_size) : nat_mod m =
+  admit()
+
+let nat_bit (m: pos) (n: nat_mod m) (bit: uint_size) : bool =
+  admit()
+
 let nat_from_secret_literal (m:pos) (x:uint128{v x < m}) : n:nat_mod m{v x == n} =
   v x
 
 let nat_from_literal (m: pos) (x:pub_uint128{v x < m}) : n:nat_mod m{v x == n} =
   v x
+
+let nat_to_byte_seq_le (n: pos) (len: uint_size) (x: nat_mod n) : lseq uint8 len =
+  let n' = n % (pow2 (8 * len)) in
+  Lib.ByteSequence.nat_to_bytes_le len n'
+
+let nat_to_byte_seq_be (n: pos)  (len: uint_size) (x: nat_mod n) : lseq uint8 len =
+  let n' = n % (pow2 (8 * len)) in
+  Lib.ByteSequence.nat_to_bytes_be len n'
 
 let nat_to_public_byte_seq_le (n: pos)  (len: uint_size) (x: nat_mod n) : lseq pub_uint8 len =
   let n' = x % (pow2 (8 * len)) in
@@ -550,6 +773,47 @@ let nat_to_public_byte_seq_be (n: pos)  (len: uint_size) (x: nat_mod n) : lseq p
   let n' = x % (pow2 (8 * len)) in
   Lib.ByteSequence.nat_to_bytes_be len n'
 
+let nat_from_byte_seq_be (n : pos) (len: uint_size) (x: lseq uint8 len) : nat_mod n =
+  let out = Lib.ByteSequence.nat_from_bytes_be x in
+  admit();
+  out
+
+let nat_from_byte_seq_le (n : pos) (len: uint_size) (x: lseq uint8 len) : nat_mod n =
+  let out = Lib.ByteSequence.nat_from_bytes_be x in
+  admit();
+  out
+
+(**** Math utils *)
+
+let mul_poly_irr
+  (#t: inttype)
+  (#l: secrecy_level)
+  (a b irr: seq (int_t t l))
+  (modulo: int_t t l) : seq (int_t t l) =
+    admit()
+
+let add_poly
+  (#t: inttype)
+  (#l: secrecy_level)
+  (a b: seq (int_t t l))
+  (modulo: int_t t l) : seq (int_t t l) =
+    admit()
+
+let poly_to_ring
+  (#t: inttype)
+  (#l: secrecy_level)
+  (irr poly: seq (int_t t l))
+  (modulo: int_t t l) : seq (int_t t l) & bool =
+    admit()
+
+let make_positive
+  (#t: inttype)
+  (#l: secrecy_level)
+  (poly: seq (int_t t l))
+  (q: int_t t l) : seq (int_t t l) =
+    admit()
+
+let nat_pow2 (m:pos) (x: nat{pow2 x < m}) : nat_mod m = pow2 x
 
 let nat_pow2 (m:pos) (x: nat{pow2 x < m}) : nat_mod m = pow2 x
 
@@ -566,15 +830,6 @@ val logand_uint64_uint128 (a a' b b': UInt.uint_t 64)
   : Lemma (UInt.logand #128 (a + pow2 64 * b) (a' + pow2 64 * b') == UInt.logand #64 a a' + pow2 64 * UInt.logand #64 b b')
 
 let logand_uint64_uint128 a a' b b' = admit()
-
-(*
-val logand_uint64_uint128 (a a' b b': uint64)
-  : Lemma (v ((pub_u128 (v a + pow2 64 * v b)) &. (pub_u128 (v a' + pow2 64 * v b'))) ==
-           (v (a &. a') + pow2 64 * v (b &. b')))
-
-let logand_uint64_uint128 a a' b b' = admit()
-*)
-
 
 val pow2_le_compat: m:nat -> n:nat -> Lemma
   (requires (m <= n))

@@ -29,6 +29,34 @@ macro_rules! unsigned_public_integer {
     ($name:ident,$n:literal) => {
         abstract_unsigned_public_integer!($name, $n);
 
+        impl $name {
+            #[cfg_attr(feature = "use_attributes", unsafe_hacspec)]
+            pub fn from_byte_seq_be<A: SeqTrait<U8>>(s: &A) -> $name {
+                $name::from_be_bytes(
+                    s.iter()
+                        .map(|x| U8::declassify(*x))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                )
+            }
+
+            #[cfg_attr(feature = "use_attributes", unsafe_hacspec)]
+            pub fn from_public_byte_seq_be<A: SeqTrait<u8>>(s: A) -> $name {
+                // XXX: unnecessarily complex
+                $name::from_be_bytes(s.iter().map(|x| *x).collect::<Vec<_>>().as_slice())
+            }
+
+            #[cfg_attr(feature = "use_attributes", unsafe_hacspec)]
+            pub fn to_byte_seq_be(self) -> Seq<U8> {
+                Seq::from_vec(
+                    self.to_be_bytes()
+                        .iter()
+                        .map(|x| U8::classify(*x))
+                        .collect::<Vec<U8>>(),
+                )
+            }
+        }
+
         impl NumericCopy for $name {}
         impl UnsignedInteger for $name {}
         impl UnsignedIntegerCopy for $name {}
@@ -195,7 +223,7 @@ macro_rules! unsigned_public_integer {
                 self > other
             }
             #[cfg_attr(feature = "use_attributes", in_hacspec)]
-            fn greater_than_or_qual(self, other: Self) -> bool {
+            fn greater_than_or_equal(self, other: Self) -> bool {
                 self >= other
             }
             #[cfg_attr(feature = "use_attributes", in_hacspec)]
@@ -234,7 +262,7 @@ macro_rules! unsigned_public_integer {
             }
             #[cfg_attr(feature = "use_attributes", in_hacspec)]
             fn greater_than_or_equal_bm(self, other: Self) -> Self {
-                if self.greater_than_or_qual(other) {
+                if self.greater_than_or_equal(other) {
                     Self::max_val()
                 } else {
                     Self::from_literal(0)
@@ -363,7 +391,7 @@ macro_rules! signed_public_integer {
                 self > other
             }
             #[cfg_attr(feature = "use_attributes", in_hacspec)]
-            fn greater_than_or_qual(self, other: Self) -> bool {
+            fn greater_than_or_equal(self, other: Self) -> bool {
                 self >= other
             }
             #[cfg_attr(feature = "use_attributes", in_hacspec)]
@@ -402,7 +430,7 @@ macro_rules! signed_public_integer {
             }
             #[cfg_attr(feature = "use_attributes", in_hacspec)]
             fn greater_than_or_equal_bm(self, other: Self) -> Self {
-                if self.greater_than_or_qual(other) {
+                if self.greater_than_or_equal(other) {
                     Self::from_signed_literal(-1)
                 } else {
                     Self::from_signed_literal(0)
@@ -526,7 +554,7 @@ macro_rules! unsigned_integer {
                 unimplemented!();
             }
             #[cfg_attr(feature = "use_attributes", in_hacspec)]
-            fn greater_than_or_qual(self, other: Self) -> bool {
+            fn greater_than_or_equal(self, other: Self) -> bool {
                 unimplemented!();
             }
             #[cfg_attr(feature = "use_attributes", in_hacspec)]
@@ -748,7 +776,7 @@ macro_rules! signed_integer {
                 unimplemented!();
             }
             #[cfg_attr(feature = "use_attributes", in_hacspec)]
-            fn greater_than_or_qual(self, other: Self) -> bool {
+            fn greater_than_or_equal(self, other: Self) -> bool {
                 unimplemented!();
             }
             #[cfg_attr(feature = "use_attributes", in_hacspec)]
@@ -793,28 +821,6 @@ macro_rules! signed_integer {
 macro_rules! nat_mod {
     (type_name: $name:ident, type_of_canvas: $base:ident, bit_size_of_field: $bits:literal, modulo_value: $n:literal) => {
         abstract_nat_mod!($name, $base, $bits, $n);
-
-        impl $name {
-            #[cfg_attr(feature = "use_attributes", unsafe_hacspec)]
-            pub fn from_byte_seq_be<A: SeqTrait<U8>>(s: A) -> $name {
-                $name::from_be_bytes(
-                    s.iter()
-                        .map(|x| U8::declassify(*x))
-                        .collect::<Vec<_>>()
-                        .as_slice(),
-                )
-            }
-
-            #[cfg_attr(feature = "use_attributes", unsafe_hacspec)]
-            pub fn to_byte_seq_be(self) -> Seq<U8> {
-                Seq::from_vec(
-                    self.to_be_bytes()
-                        .iter()
-                        .map(|x| U8::classify(*x))
-                        .collect::<Vec<U8>>(),
-                )
-            }
-        }
 
         impl $name {
             #[cfg_attr(feature = "use_attributes", unsafe_hacspec)]
@@ -1034,7 +1040,7 @@ macro_rules! nat_mod {
                 bm != BigInt::zero()
             }
             #[cfg_attr(feature = "use_attributes", in_hacspec)]
-            fn greater_than_or_qual(self, other: Self) -> bool {
+            fn greater_than_or_equal(self, other: Self) -> bool {
                 let bm = self.greater_than_or_equal_bm(other);
                 let bm: BigInt = bm.declassify();
                 bm != BigInt::zero()
@@ -1089,18 +1095,19 @@ macro_rules! public_nat_mod {
 
         impl $name {
             #[cfg_attr(feature = "use_attributes", unsafe_hacspec)]
-            pub fn from_byte_seq_be<A: SeqTrait<U8>>(s: A) -> $name {
-                $name::from_be_bytes(
+            pub fn from_byte_seq_be<A: SeqTrait<U8>>(s: &A) -> $name {
+                $base::from_be_bytes(
                     s.iter()
                         .map(|x| U8::declassify(*x))
                         .collect::<Vec<_>>()
                         .as_slice(),
                 )
+                .into()
             }
 
             #[cfg_attr(feature = "use_attributes", unsafe_hacspec)]
             pub fn from_public_byte_seq_be<A: SeqTrait<u8>>(s: A) -> $name {
-                $name::from_be_bytes(s.iter().map(|x| *x).collect::<Vec<_>>().as_slice())
+                $base::from_be_bytes(s.iter().map(|x| *x).collect::<Vec<_>>().as_slice()).into()
             }
 
             #[cfg_attr(feature = "use_attributes", unsafe_hacspec)]
@@ -1120,17 +1127,18 @@ macro_rules! public_nat_mod {
 
             #[cfg_attr(feature = "use_attributes", unsafe_hacspec)]
             pub fn from_byte_seq_le<A: SeqTrait<U8>>(s: A) -> $name {
-                $name::from_le_bytes(
+                $base::from_le_bytes(
                     s.iter()
                         .map(|x| U8::declassify(*x))
                         .collect::<Vec<_>>()
                         .as_slice(),
                 )
+                .into()
             }
 
             #[cfg_attr(feature = "use_attributes", unsafe_hacspec)]
             pub fn from_public_byte_seq_le<A: SeqTrait<u8>>(s: A) -> $name {
-                $name::from_le_bytes(s.iter().map(|x| *x).collect::<Vec<_>>().as_slice())
+                $base::from_le_bytes(s.iter().map(|x| *x).collect::<Vec<_>>().as_slice()).into()
             }
 
             #[cfg_attr(feature = "use_attributes", unsafe_hacspec)]
@@ -1150,7 +1158,7 @@ macro_rules! public_nat_mod {
 
             #[cfg_attr(feature = "use_attributes", unsafe_hacspec)]
             pub fn from_secret_literal(x: U128) -> $name {
-                $name::from_literal(U128::declassify(x))
+                $base::from_literal(U128::declassify(x)).into()
             }
         }
 
@@ -1322,7 +1330,7 @@ macro_rules! public_nat_mod {
                 self > other
             }
             #[cfg_attr(feature = "use_attributes", in_hacspec)]
-            fn greater_than_or_qual(self, other: Self) -> bool {
+            fn greater_than_or_equal(self, other: Self) -> bool {
                 self >= other
             }
             #[cfg_attr(feature = "use_attributes", in_hacspec)]

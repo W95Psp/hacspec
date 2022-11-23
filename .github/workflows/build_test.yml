@@ -7,21 +7,32 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        os:
+          - ubuntu-latest
+          - macos-latest
 
     steps:
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - name: Prepare
-        run: rustup toolchain install nightly-2021-03-11 && rustup default nightly-2021-03-11 && rustup component add --toolchain nightly-2021-03-11 rustc-dev && rustup component add --toolchain nightly-2021-03-11 llvm-tools-preview
       - name: Build
         run: cargo build --verbose
-      - name: Run tests
-        run: cargo test --verbose
+      - name: Run library tests
+        run: cargo test --verbose -p hacspec-lib
       - name: Test Provider
         run: cargo test --verbose -p rc-tests
       - name: Get hacspec function stats
-        run: RUST_NIGHTLY=nightly-2021-03-11 ./lib/get_func_stats.sh
-      - name: Build and test F* compiler
-        run: cargo clean && cd language && cargo +nightly-2021-03-11 test --verbose
+        run: RUST_NIGHTLY=nightly-2022-07-04 ./lib/get_func_stats.sh
+      - name: Build and test Hacspec compiler
+        run: cargo clean && cargo build -p hacspec-lib && cd language && cargo test --verbose
+
+  build_no_std:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Install no_std target
+        run: rustup target add thumbv7em-none-eabi
+      - name: Build no_std hacspec-lib
+        run: cargo build --target thumbv7em-none-eabi -p hacspec-lib --no-default-features --features alloc -Zfeatures=all

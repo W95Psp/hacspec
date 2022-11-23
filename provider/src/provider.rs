@@ -1,12 +1,12 @@
-pub use aead::{self, Aead, AeadInPlace, Error, NewAead, Payload};
+pub use aead::{self, Aead, AeadCore, AeadInPlace, Error, NewAead, Payload};
 use aead::{
     consts::{U0, U12, U16, U32},
     generic_array::GenericArray,
 };
-use hacspec_chacha20::{ChaChaKey as HacspecKey, ChaChaIV as IV};
+use hacspec_chacha20::{ChaChaIV as IV, ChaChaKey as HacspecKey};
 use hacspec_chacha20poly1305::*;
 use hacspec_lib::prelude::*;
-use hacspec_poly1305::Tag as HacspecTag;
+use hacspec_poly1305::Poly1305Tag as HacspecTag;
 
 pub struct Chacha20Poly1305 {
     key: Key,
@@ -24,11 +24,13 @@ impl NewAead for Chacha20Poly1305 {
     }
 }
 
-impl AeadInPlace for Chacha20Poly1305 {
+impl AeadCore for Chacha20Poly1305 {
     type NonceSize = U12;
     type TagSize = U16;
     type CiphertextOverhead = U0;
+}
 
+impl AeadInPlace for Chacha20Poly1305 {
     fn encrypt_in_place_detached(
         &self,
         nonce: &Nonce,
@@ -37,7 +39,7 @@ impl AeadInPlace for Chacha20Poly1305 {
     ) -> Result<Tag, Error> {
         let nonce = IV::from_public_slice(&(nonce.as_slice()));
         let key = HacspecKey::from_public_slice(&self.key.as_slice());
-        let (ctxt, tag) = encrypt(
+        let (ctxt, tag) = chacha20_poly1305_encrypt(
             key,
             nonce,
             &ByteSeq::from_public_slice(&associated_data),
@@ -59,21 +61,22 @@ impl AeadInPlace for Chacha20Poly1305 {
         buffer: &mut [u8],
         tag: &Tag,
     ) -> Result<(), Error> {
-        let res = decrypt(
+        let ptxt = chacha20_poly1305_decrypt(
             HacspecKey::from_public_slice(self.key.as_slice()),
             IV::from_public_slice(nonce),
             &ByteSeq::from_public_slice(associated_data),
             &ByteSeq::from_public_slice(buffer),
             HacspecTag::from_public_slice(tag),
         );
-
-        match res {
-            None => Err(Error),
-            Some(ptxt) => {
+        match ptxt {
+            Ok(ptxt) => {
                 buffer
-                .iter_mut()
-                .zip(ptxt.iter())
-                .for_each(|(dst, &src)| *dst = src.declassify());
-               Ok(())}}
+                    .iter_mut()
+                    .zip(ptxt.iter())
+                    .for_each(|(dst, &src)| *dst = src.declassify());
+                Ok(())
+            }
+            Err(_) => Err(Error),
+        }
     }
 }

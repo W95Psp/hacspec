@@ -42,9 +42,11 @@ fn main() {
         args.remove(0);
     };
 
-    if args.len() < 1 {
-        println!("{}", APP_USAGE);
-        std::process::exit(1);
+    if let Some(arg0) = args.get(0) {
+        if arg0 == "--help" || arg0 == "-h" {
+            println!("{}", APP_USAGE);
+            std::process::exit(1);
+        }
     }
 
     let environment: HashMap<String, String> = env::vars().collect();
@@ -56,5 +58,6 @@ fn main() {
         .args(args)
         .status()
         .expect("Couldn't run hacspec");
+
     std::process::exit(hacspec_out.code().unwrap());
 }

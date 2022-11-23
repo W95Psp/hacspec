@@ -1,10 +1,11 @@
 use im::HashMap;
-use rustc_hir::{definitions::DefPathData, AssocItemKind, ItemKind};
+use rustc_hir::{def::DefKind, definitions::DefPathData, AssocItemKind, ItemKind};
 use rustc_metadata::creader::CStore;
-use rustc_middle::mir::interpret::{ConstValue, Scalar};
-use rustc_middle::mir::terminator::Mutability;
+use rustc_middle::mir::Mutability;
 use rustc_middle::ty::subst::GenericArgKind;
-use rustc_middle::ty::{self, ConstKind, IntTy, PolyFnSig, RegionKind, TyCtxt, TyKind, UintTy};
+use rustc_middle::ty::{
+    self, AdtKind, ConstKind, IntTy, PolyFnSig, RegionKind, TyCtxt, TyKind, UintTy, ValTree,
+};
 use rustc_session::Session;
 use rustc_span::{
     def_id::{CrateNum, DefId, DefIndex, LOCAL_CRATE},
@@ -12,8 +13,9 @@ use rustc_span::{
 };
 use std::sync::atomic::Ordering;
 
+use crate::name_resolution::{FnKey, ID_COUNTER};
 use crate::rustspec::*;
-use crate::typechecker::{FnKey, ID_COUNTER};
+use crate::util::check_vec;
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 enum ParamType {
@@ -28,7 +30,7 @@ fn fresh_type_var(
     p: ParamType,
     typ_ctx: &TypVarContext,
 ) -> (BaseTyp, TypVarContext) {
-    let t = BaseTyp::Variable(HacspecId(ID_COUNTER.fetch_add(1, Ordering::SeqCst)));
+    let t = BaseTyp::Variable(TypVar(ID_COUNTER.fetch_add(1, Ordering::SeqCst)));
     (t.clone(), typ_ctx.update((p, rust_id), t))
 }
 
@@ -51,7 +53,7 @@ fn translate_base_typ(
         TyKind::Uint(UintTy::U32) => Ok((BaseTyp::UInt32, typ_ctx.clone())),
         TyKind::Uint(UintTy::U64) => Ok((BaseTyp::UInt64, typ_ctx.clone())),
         TyKind::Uint(UintTy::U128) => Ok((BaseTyp::UInt128, typ_ctx.clone())),
-        TyKind::Ref(region, inner_ty, mutability) => match region {
+        TyKind::Ref(region, inner_ty, mutability) => match region.kind() {
             RegionKind::ReStatic => match mutability {
                 Mutability::Not => match inner_ty.kind() {
                     TyKind::Str => Ok((BaseTyp::Str, typ_ctx.clone())),
@@ -62,7 +64,7 @@ fn translate_base_typ(
             _ => Err(()),
         },
         TyKind::Adt(adt, substs) => {
-            let adt_id = adt.did;
+            let adt_id = adt.did();
             let adt_def_path = tcx.def_path(adt_id);
             // We're looking at types from imported crates that can only be imported
             // with * blobs so the types have to be re-exported from inner modules,
@@ -70,7 +72,7 @@ fn translate_base_typ(
             // be ambiguities)
             match adt_def_path.data.last().unwrap().data {
                 DefPathData::TypeNs(name) => match tcx
-                    .original_crate_name(adt_def_path.krate)
+                    .crate_name(adt_def_path.krate)
                     .to_ident_string()
                     .as_str()
                 {
@@ -89,13 +91,22 @@ fn translate_base_typ(
                             } else {
                                 return Err(());
                             };
-                            Ok((BaseTyp::Seq(Box::new((param_typ, DUMMY_SP))), typ_ctx))
+                            Ok((
+                                BaseTyp::Seq(Box::new((param_typ, DUMMY_SP.into()))),
+                                typ_ctx,
+                            ))
                         }
                         // We accept all named types from hacspec_lib because of the predefined
                         // array types like U32Word, etc.
                         _ => Ok((
                             BaseTyp::Named(
-                                (Ident::Original(name.to_ident_string()), DUMMY_SP),
+                                (
+                                    TopLevelIdent {
+                                        string: name.to_ident_string(),
+                                        kind: TopLevelIdentKind::Type,
+                                    },
+                                    DUMMY_SP.into(),
+                                ),
                                 None,
                             ),
                             typ_ctx.clone(),
@@ -118,16 +129,97 @@ fn translate_base_typ(
                             };
                             Ok((
                                 BaseTyp::Tuple(vec![
-                                    (param_typ.clone(), DUMMY_SP),
-                                    (param_typ, DUMMY_SP),
+                                    (param_typ.clone(), DUMMY_SP.into()),
+                                    (param_typ, DUMMY_SP.into()),
                                 ]),
                                 typ_ctx,
+                            ))
+                        }
+                        "Option" => {
+                            let (param_typ, typ_ctx) = if substs.len() == 1 {
+                                match substs.first().unwrap().unpack() {
+                                    GenericArgKind::Type(arg_ty) => {
+                                        match translate_base_typ(tcx, &arg_ty, typ_ctx) {
+                                            Ok((t, typ_ctx)) => (t, typ_ctx),
+                                            Err(()) => return Err(()),
+                                        }
+                                    }
+                                    _ => return Err(()),
+                                }
+                            } else {
+                                return Err(());
+                            };
+                            Ok((
+                                BaseTyp::Named(
+                                    (
+                                        TopLevelIdent {
+                                            string: name.to_ident_string(),
+                                            kind: TopLevelIdentKind::Type,
+                                        },
+                                        DUMMY_SP.into(),
+                                    ),
+                                    Some(vec![(param_typ, DUMMY_SP.into())]),
+                                ),
+                                typ_ctx.clone(),
+                            ))
+                        }
+                        "Result" => {
+                            let (param_typ1, typ_ctx) = if substs.len() == 2 {
+                                match substs.first().unwrap().unpack() {
+                                    GenericArgKind::Type(arg_ty) => {
+                                        match translate_base_typ(tcx, &arg_ty, typ_ctx) {
+                                            Ok((t, typ_ctx)) => (t, typ_ctx),
+                                            Err(()) => return Err(()),
+                                        }
+                                    }
+                                    _ => return Err(()),
+                                }
+                            } else {
+                                return Err(());
+                            };
+                            let (param_typ2, typ_ctx) = if substs.len() == 2 {
+                                match substs[1].unpack() {
+                                    GenericArgKind::Type(arg_ty) => {
+                                        match translate_base_typ(tcx, &arg_ty, &typ_ctx) {
+                                            Ok((t, typ_ctx)) => (t, typ_ctx),
+                                            Err(()) => return Err(()),
+                                        }
+                                    }
+                                    _ => return Err(()),
+                                }
+                            } else {
+                                return Err(());
+                            };
+                            Ok((
+                                BaseTyp::Named(
+                                    (
+                                        TopLevelIdent {
+                                            string: name.to_ident_string(),
+                                            kind: TopLevelIdentKind::Type,
+                                        },
+                                        DUMMY_SP.into(),
+                                    ),
+                                    Some(vec![
+                                        (param_typ1, DUMMY_SP.into()),
+                                        (param_typ2, DUMMY_SP.into()),
+                                    ]),
+                                ),
+                                typ_ctx.clone(),
                             ))
                         }
                         _ => Err(()),
                     },
                     _ => Ok((
-                        BaseTyp::Named((Ident::Original(name.to_ident_string()), DUMMY_SP), None),
+                        BaseTyp::Named(
+                            (
+                                TopLevelIdent {
+                                    string: name.to_ident_string(),
+                                    kind: TopLevelIdentKind::Type,
+                                },
+                                DUMMY_SP.into(),
+                            ),
+                            None,
+                        ),
                         typ_ctx.clone(),
                     )),
                 },
@@ -152,9 +244,9 @@ fn translate_base_typ(
         },
         TyKind::Tuple(args) => {
             let mut new_args = Vec::new();
-            let typ_ctx = args.types().fold(Ok(typ_ctx.clone()), |typ_ctx, ty| {
+            let typ_ctx = args.iter().fold(Ok(typ_ctx.clone()), |typ_ctx, ty| {
                 let (new_ty, typ_ctx) = translate_base_typ(tcx, &ty, &typ_ctx?)?;
-                new_args.push((new_ty, DUMMY_SP));
+                new_args.push((new_ty, DUMMY_SP.into()));
                 Ok(typ_ctx)
             })?;
             Ok((BaseTyp::Tuple(new_args), typ_ctx))
@@ -171,11 +263,23 @@ fn translate_ty(
     match ty.kind() {
         TyKind::Ref(_, ref_ty, Mutability::Not) => {
             let (ty, typ_ctx) = translate_base_typ(tcx, &ref_ty, typ_ctx)?;
-            Ok((((Borrowing::Borrowed, DUMMY_SP), (ty, DUMMY_SP)), typ_ctx))
+            Ok((
+                (
+                    (Borrowing::Borrowed, DUMMY_SP.into()),
+                    (ty, DUMMY_SP.into()),
+                ),
+                typ_ctx,
+            ))
         }
         _ => {
             let (ty, typ_ctx) = translate_base_typ(tcx, ty, typ_ctx)?;
-            Ok((((Borrowing::Consumed, DUMMY_SP), (ty, DUMMY_SP)), typ_ctx))
+            Ok((
+                (
+                    (Borrowing::Consumed, DUMMY_SP.into()),
+                    (ty, DUMMY_SP.into()),
+                ),
+                typ_ctx,
+            ))
         }
     }
 }
@@ -184,7 +288,7 @@ fn translate_polyfnsig(
     tcx: &TyCtxt,
     sig: &PolyFnSig,
     typ_ctx: &TypVarContext,
-) -> Result<ExternalFuncSig, ()> {
+) -> Result<(ExternalFuncSig, TypVarContext), ()> {
     // The type context maps De Bruijn indexed types in the signature
     // to Hacspec type variables
     let mut new_args = Vec::new();
@@ -197,11 +301,14 @@ fn translate_polyfnsig(
             new_args.push(new_ty);
             Ok(typ_ctx)
         })?;
-    let (ret, _) = translate_base_typ(tcx, &sig.output().skip_binder(), &typ_ctx)?;
-    Ok(ExternalFuncSig {
-        args: new_args,
-        ret,
-    })
+    let (ret, new_typ_var_ctx) = translate_base_typ(tcx, &sig.output().skip_binder(), &typ_ctx)?;
+    Ok((
+        ExternalFuncSig {
+            args: new_args,
+            ret,
+        },
+        new_typ_var_ctx,
+    ))
 }
 
 fn insert_extern_func(
@@ -219,9 +326,15 @@ fn insert_extern_func(
         }
         Some(old_sig) => match (old_sig, &sig) {
             (Ok(_), Err(_)) => (),
-            _ => {
+            (Err(_), Ok(_)) => {
                 extern_funcs.insert(fn_key, sig);
             }
+            (Ok(x), Ok(y)) => {
+                if x.args.len() > y.args.len() {
+                    extern_funcs.insert(fn_key, sig);
+                } // TODO: do something?, extern_funcs.insert(fn_key, sig);
+            }
+            _ => (),
         },
     }
 }
@@ -247,14 +360,16 @@ fn process_fn_id(
                     // Function not within impl block
                     let export_sig = tcx.fn_sig(*id);
                     let sig = match translate_polyfnsig(tcx, &export_sig, &HashMap::new()) {
-                        Ok(sig) => Ok(sig),
+                        Ok((sig, _)) => Ok(sig),
                         Err(()) => Err(format!("{}", export_sig)),
                     };
                     let name_segment = def_path.data.last().unwrap();
                     match name_segment.data {
                         DefPathData::ValueNs(name) => {
-                            let fn_key =
-                                FnKey::Independent(Ident::Original(name.to_ident_string()));
+                            let fn_key = FnKey::Independent(TopLevelIdent {
+                                string: name.to_ident_string(),
+                                kind: TopLevelIdentKind::Function,
+                            });
                             insert_extern_func(extern_funcs, fn_key, sig);
                         }
                         _ => (),
@@ -273,12 +388,15 @@ fn process_fn_id(
                                 Ok((impl_type, typ_ctx)) => {
                                     let fn_key = FnKey::Impl(
                                         impl_type,
-                                        Ident::Original(name.to_ident_string()),
+                                        TopLevelIdent {
+                                            string: name.to_ident_string(),
+                                            kind: TopLevelIdentKind::Function,
+                                        },
                                     );
                                     let export_sig = tcx.fn_sig(*id);
                                     let sig = match translate_polyfnsig(tcx, &export_sig, &typ_ctx)
                                     {
-                                        Ok(sig) => Ok(sig),
+                                        Ok((sig, _)) => Ok(sig),
                                         Err(()) => Err(format!("{}", export_sig)),
                                     };
                                     insert_extern_func(extern_funcs, fn_key, sig);
@@ -294,115 +412,326 @@ fn process_fn_id(
         _ => {
             let def_path = tcx.def_path(*id);
             if def_path.krate == *krate_num {
-                if def_path.data.len() == 1 {
-                    let ty = translate_base_typ(tcx, &tcx.type_of(*id), &HashMap::new());
-                    match ty {
-                        Ok((ty, _)) => match def_path.data[0].data {
-                            DefPathData::ValueNs(name) => {
-                                extern_consts.insert(name.to_ident_string(), ty);
-                            }
-                            _ => (),
-                        },
-                        Err(_) => (),
-                    }
+                let ty = translate_base_typ(tcx, &tcx.type_of(*id), &HashMap::new());
+                match ty {
+                    Ok((ty, _)) => match def_path.data.last().unwrap().data {
+                        DefPathData::ValueNs(name) => {
+                            extern_consts.insert(name.to_ident_string(), ty);
+                        }
+                        _ => (),
+                    },
+                    Err(_) => (),
                 }
             }
         }
     };
 }
 
-fn add_array_type_from_ctor_sig(
-    tcx: &TyCtxt,
-    sig: &PolyFnSig,
-    external_arrays: &mut HashMap<String, BaseTyp>,
-) {
-    let ret = sig.output().skip_binder();
-    match ret.kind() {
-        TyKind::Adt(adt, substs) => {
+enum SpecialTypeReturn {
+    Array(BaseTyp),
+    NatInt(BaseTyp),
+    RawAbstractInt(BaseTyp),
+    Enum(BaseTyp),
+    NotSpecial,
+}
+
+fn check_non_enum_special_type_from_struct_shape(tcx: &TyCtxt, def: &ty::Ty) -> SpecialTypeReturn {
+    // First we check whether the type is a special Hacspec type (array, abstract int, etc.)
+    match def.kind() {
+        TyKind::Adt(adt, substs) if adt.is_struct() => {
             if substs.len() > 0 {
-                return ();
+                return SpecialTypeReturn::NotSpecial;
             }
-            if adt.variants.len() != 1 {
-                return ();
+            if adt.variants().len() != 1 {
+                return SpecialTypeReturn::NotSpecial;
             }
-            for variant in adt.variants.iter() {
-                if variant.fields.len() != 1 {
-                    return ();
+            let variant = adt.variants().iter().next().unwrap();
+            let maybe_abstract_int = match variant.fields.len() {
+                1 => false,
+                3 => true,
+                _ => {
+                    return SpecialTypeReturn::NotSpecial;
                 }
-                for field in variant.fields.iter() {
-                    match tcx.type_of(field.did).kind() {
-                        TyKind::Array(cell_t, size) => {
-                            let (new_cell_t, _) =
-                                match translate_base_typ(tcx, cell_t, &HashMap::new()) {
-                                    Ok(x) => x,
-                                    Err(()) => return (),
-                                };
-                            let new_size = match &size.val {
-                                ConstKind::Value(value) => match value {
-                                    ConstValue::Scalar(scalar) => match scalar {
-                                        Scalar::Int(s) => s.to_bits(s.size()).unwrap() as usize,
-                                        _ => return (),
-                                    },
-                                    _ => return (),
-                                },
-                                _ => return (),
-                            };
-                            let array_typ = BaseTyp::Array(
-                                (ArraySize::Integer(new_size), DUMMY_SP),
-                                Box::new((new_cell_t, DUMMY_SP)),
-                            );
-                            let array_name =
-                                tcx.def_path(adt.did).data.last().unwrap().data.to_string();
-                            external_arrays.insert(array_name, array_typ);
+            };
+            let field = variant.fields.iter().next().unwrap();
+            let field_typ = tcx.type_of(field.did);
+            match &field_typ.kind() {
+                TyKind::Array(cell_t, size) => {
+                    let (new_cell_t, _) = match translate_base_typ(tcx, cell_t, &HashMap::new()) {
+                        Ok(x) => x,
+                        Err(()) => {
+                            return SpecialTypeReturn::NotSpecial;
                         }
-                        _ => return (),
+                    };
+                    let new_size = match &(size.kind()) {
+                        // We can only retrieve the actual size of the array
+                        // when the size has been declared as a literal value,
+                        // not a reference to another const value
+                        ConstKind::Value(value) => match value {
+                            ValTree::Leaf(s) => Some(s.to_bits(s.size()).unwrap() as usize),
+                            // TODO: replace placeholder value by indication
+                            // that we could not retrieve the size
+                            _ => Some(0),
+                        },
+                        _ => Some(0),
+                    };
+                    if maybe_abstract_int {
+                        // So here we cannot infer neither the secrecy nor the modulo
+                        // value, nor the size, but its fine for typechecking?
+                        let nat_int_typ = BaseTyp::NaturalInteger(
+                            Secrecy::Secret,
+                            ("unknown".to_string(), DUMMY_SP.into()),
+                            (0, DUMMY_SP.into()),
+                        );
+                        return SpecialTypeReturn::RawAbstractInt(nat_int_typ);
+                    } else {
+                        match new_size {
+                            None => return SpecialTypeReturn::NotSpecial,
+                            Some(new_size) => {
+                                let array_typ = BaseTyp::Array(
+                                    (ArraySize::Integer(new_size), DUMMY_SP.into()),
+                                    Box::new((new_cell_t, DUMMY_SP.into())),
+                                );
+                                return SpecialTypeReturn::Array(array_typ);
+                            }
+                        }
                     }
                 }
+                _ => match check_special_type_from_struct_shape(tcx, &field_typ) {
+                    SpecialTypeReturn::NotSpecial
+                    | SpecialTypeReturn::NatInt(_)
+                    | SpecialTypeReturn::Array(_)
+                    | SpecialTypeReturn::Enum(_) => return SpecialTypeReturn::NotSpecial,
+                    SpecialTypeReturn::RawAbstractInt(nat_int_typ) => {
+                        return SpecialTypeReturn::NatInt(nat_int_typ)
+                    }
+                },
             }
-            ()
         }
-        _ => (),
+        _ => return SpecialTypeReturn::NotSpecial,
+    };
+}
+
+fn check_special_type_from_struct_shape(tcx: &TyCtxt, def: &ty::Ty) -> SpecialTypeReturn {
+    match check_non_enum_special_type_from_struct_shape(tcx, def) {
+        SpecialTypeReturn::NotSpecial => (),
+        ret => return ret,
+    }
+    // If it is not a special type, we check whether it is an enum (or wrapper struct)
+    match def.kind() {
+        TyKind::Adt(adt, substs) => {
+            let mut typ_var_ctx = HashMap::new();
+            match adt.adt_kind() {
+                AdtKind::Enum => {
+                    // TODO: check whether substs contains only unconstrained type parameters
+                    let cases = check_vec(
+                        adt.variants()
+                            .iter()
+                            .map(|variant| {
+                                let name = variant.ident(*tcx).name.to_ident_string();
+                                let case_id = variant.def_id;
+                                let case_typ = tcx.type_of(case_id);
+                                let case_typ = match case_typ.kind() {
+                                    TyKind::FnDef(constr_def, _) => {
+                                        let constr_sig = tcx.fn_sig(*constr_def);
+                                        let (sig, new_typ_var_ctx) =
+                                            translate_polyfnsig(tcx, &constr_sig, &typ_var_ctx)?;
+                                        typ_var_ctx = new_typ_var_ctx;
+                                        let mut args = sig.args.into_iter().map(|arg| arg.1);
+                                        if args.len() == 1 {
+                                            let ty = args.next().unwrap();
+                                            Some(ty)
+                                        } else {
+                                            let ty = BaseTyp::Tuple(args.collect());
+                                            Some((ty, RustspecSpan::from(variant.ident(*tcx).span)))
+                                        }
+                                    }
+                                    _ => None, // If the type of the constructor is not a function, then there is no payload
+                                };
+                                Ok((
+                                    (
+                                        TopLevelIdent {
+                                            string: name,
+                                            kind: TopLevelIdentKind::EnumConstructor,
+                                        },
+                                        RustspecSpan::from(variant.ident(*tcx).span),
+                                    ),
+                                    case_typ,
+                                ))
+                            })
+                            .collect(),
+                    );
+                    match cases {
+                        Ok(cases) if cases.len() > 0 => {
+                            return SpecialTypeReturn::Enum(BaseTyp::Enum(
+                                cases,
+                                match check_vec(
+                                    substs
+                                        .into_iter()
+                                        .map(|subst| match subst.unpack() {
+                                            GenericArgKind::Type(arg_ty) => {
+                                                match translate_base_typ(tcx, &arg_ty, &typ_var_ctx)
+                                                {
+                                                    Ok((BaseTyp::Variable(id), _)) => Ok(id),
+                                                    _ => Err(()),
+                                                }
+                                            }
+                                            _ => Err(()),
+                                        })
+                                        .collect(),
+                                ) {
+                                    Ok(args) => args,
+                                    Err(_) => return SpecialTypeReturn::NotSpecial,
+                                },
+                            ))
+                        }
+                        _ => {
+                            return SpecialTypeReturn::NotSpecial;
+                        }
+                    }
+                }
+                AdtKind::Struct => {
+                    // This case imports non-generic wrapper structs
+                    if substs.len() > 0 {
+                        return SpecialTypeReturn::NotSpecial;
+                    }
+                    if adt.variants().len() != 1 {
+                        return SpecialTypeReturn::NotSpecial;
+                    }
+                    let variant = adt.variants().iter().next().unwrap();
+                    let name = variant.ident(*tcx).name.to_ident_string();
+                    // Some wrapper structs are defined in std, core or
+                    // hacspec_lib but we don't want to import them
+                    // so we special case them out here
+                    let temp = tcx.crate_name(tcx.def_path(adt.did()).krate);
+                    let crate_name = temp.as_str();
+                    match crate_name {
+                        "core" | "std" | "hacspec_lib" | "secret_integers"
+                        | "abstract_integers" => {
+                            return SpecialTypeReturn::NotSpecial;
+                        }
+                        _ => (),
+                    }
+                    let fields_typ = match check_vec(
+                        variant
+                            .fields
+                            .iter()
+                            .map(|field| {
+                                // We only allow fields without names
+                                match field.ident(*tcx).name.to_ident_string().parse::<i32>() {
+                                    Ok(_) => (),
+                                    Err(_) => return Err(()),
+                                }
+                                let field_typ = tcx.type_of(field.did);
+                                let (ty, _) = translate_base_typ(tcx, &field_typ, &HashMap::new())?;
+                                Ok((ty, RustspecSpan::from(variant.ident(*tcx).span)))
+                            })
+                            .collect(),
+                    ) {
+                        Ok(x) => x,
+                        Err(_) => return SpecialTypeReturn::NotSpecial,
+                    };
+                    let case_typ = if fields_typ.len() == 1 {
+                        let ty = fields_typ.into_iter().next().unwrap();
+                        Some(ty)
+                    } else {
+                        let ty = BaseTyp::Tuple(fields_typ);
+                        Some((ty, RustspecSpan::from(variant.ident(*tcx).span)))
+                    };
+                    return SpecialTypeReturn::Enum(BaseTyp::Enum(
+                        vec![(
+                            (
+                                TopLevelIdent {
+                                    string: name,
+                                    kind: TopLevelIdentKind::EnumConstructor,
+                                },
+                                RustspecSpan::from(variant.ident(*tcx).span),
+                            ),
+                            case_typ,
+                        )],
+                        vec![],
+                    ));
+                }
+                _ => return SpecialTypeReturn::NotSpecial,
+            }
+        }
+        _ => return SpecialTypeReturn::NotSpecial,
     }
 }
 
-pub fn retrieve_external_functions(
+fn add_special_type_from_struct_shape(
+    tcx: &TyCtxt,
+    def_id: DefId,
+    def: &ty::Ty,
+    external_arrays: &mut HashMap<String, BaseTyp>,
+    external_nat_ints: &mut HashMap<String, BaseTyp>,
+    external_enums: &mut HashMap<String, BaseTyp>, // The usize is the
+                                                   // number of type arguments to the enum
+) {
+    let def_name = tcx.def_path(def_id).data.last().unwrap().data.to_string();
+    match check_special_type_from_struct_shape(tcx, def) {
+        SpecialTypeReturn::Array(array_typ) => {
+            external_arrays.insert(def_name, array_typ);
+        }
+        SpecialTypeReturn::NatInt(nat_int_typ) => {
+            external_nat_ints.insert(def_name, nat_int_typ);
+        }
+        SpecialTypeReturn::Enum(enum_typ) => {
+            external_enums.insert(def_name, enum_typ);
+        }
+        SpecialTypeReturn::NotSpecial | SpecialTypeReturn::RawAbstractInt(_) => {}
+    }
+}
+
+pub struct ExternalData {
+    pub funcs: HashMap<FnKey, Result<ExternalFuncSig, String>>,
+    pub consts: HashMap<String, BaseTyp>,
+    pub arrays: HashMap<String, BaseTyp>,
+    pub nat_ints: HashMap<String, BaseTyp>,
+    pub enums: HashMap<String, BaseTyp>,
+    pub ty_aliases: HashMap<String, BaseTyp>,
+}
+
+pub fn retrieve_external_data(
     sess: &Session,
     tcx: &TyCtxt,
     imported_crates: &Vec<Spanned<String>>,
-) -> (
-    HashMap<FnKey, Result<ExternalFuncSig, String>>,
-    HashMap<String, BaseTyp>,
-    HashMap<String, BaseTyp>,
-) {
-    let mut krates: Vec<_> = tcx.crates().iter().collect();
+) -> ExternalData {
+    let mut krates: Vec<_> = tcx.crates(()).iter().collect();
     krates.push(&LOCAL_CRATE);
     let mut extern_funcs = HashMap::new();
     let mut extern_consts = HashMap::new();
     let mut extern_arrays = HashMap::new();
-    let crate_store = tcx.cstore_as_any().downcast_ref::<CStore>().unwrap();
+    let mut extern_nat_ints = HashMap::new();
+    let mut extern_enums = HashMap::new();
+    let mut ty_aliases = HashMap::new();
+    let crate_store = tcx
+        .cstore_untracked()
+        .as_any()
+        .downcast_ref::<CStore>()
+        .unwrap();
     let mut imported_crates = imported_crates.clone();
     // You normally only import hacspec_lib which then reexports the definitions
     // from abstract_integers and secret_integers. But we do have to fetch those
     // reexported definitions here and thus need to examine the original crates
     // containing them
-    imported_crates.push(("core".to_string(), DUMMY_SP));
-    imported_crates.push(("abstract_integers".to_string(), DUMMY_SP));
-    imported_crates.push(("secret_integers".to_string(), DUMMY_SP));
+    imported_crates.push(("core".to_string(), DUMMY_SP.into()));
+    imported_crates.push(("abstract_integers".to_string(), DUMMY_SP.into()));
+    imported_crates.push(("secret_integers".to_string(), DUMMY_SP.into()));
     for krate_num in krates {
-        let original_crate_name = tcx.original_crate_name(*krate_num);
+        let crate_name = tcx.crate_name(*krate_num);
         if imported_crates
             .iter()
             .filter(|(imported_crate, _)| {
-                *imported_crate == original_crate_name.to_ident_string()
-                    || original_crate_name.to_ident_string()
-                        == tcx.original_crate_name(LOCAL_CRATE).to_ident_string()
+                *imported_crate == crate_name.to_ident_string()
+                    || crate_name.to_ident_string() == tcx.crate_name(LOCAL_CRATE).to_ident_string()
             })
             .collect::<Vec<_>>()
             .len()
             > 0
         {
             if *krate_num != LOCAL_CRATE {
-                let num_def_ids = crate_store.num_def_ids(*krate_num);
+                let num_def_ids = crate_store.num_def_ids_untracked(*krate_num);
                 let def_ids = (0..num_def_ids).into_iter().map(|id| DefId {
                     krate: *krate_num,
                     index: DefIndex::from_usize(id),
@@ -412,10 +741,39 @@ pub fn retrieve_external_functions(
                     match &def_path.data.last() {
                         Some(x) => {
                             // We only import things really defined in the crate
-                            if tcx.original_crate_name(def_path.krate).to_ident_string()
-                                == original_crate_name.to_ident_string()
+                            if tcx.crate_name(def_path.krate).to_ident_string()
+                                == crate_name.to_ident_string()
                             {
                                 match x.data {
+                                    DefPathData::TypeNs(name) => match tcx.def_kind(def_id) {
+                                        DefKind::Struct | DefKind::Enum => {
+                                            add_special_type_from_struct_shape(
+                                                tcx,
+                                                def_id,
+                                                &tcx.type_of(def_id),
+                                                &mut extern_arrays,
+                                                &mut extern_nat_ints,
+                                                &mut extern_enums,
+                                            )
+                                        }
+                                        DefKind::TyAlias => {
+                                            if def_path.data.len() <= 2 {
+                                                let typ = tcx.type_of(def_id);
+                                                match translate_base_typ(tcx, &typ, &HashMap::new())
+                                                {
+                                                    Err(_) => (),
+                                                    Ok((hacspec_ty, _)) => {
+                                                        ty_aliases.insert(
+                                                            name.to_ident_string(),
+                                                            hacspec_ty,
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        _ => (),
+                                    },
                                     DefPathData::ValueNs(_) => process_fn_id(
                                         sess,
                                         tcx,
@@ -438,21 +796,18 @@ pub fn retrieve_external_functions(
                                                 &export_sig,
                                                 &HashMap::new(),
                                             ) {
-                                                Ok(sig) => Ok(sig),
+                                                Ok((sig, _)) => Ok(sig),
                                                 Err(()) => Err(format!("{}", export_sig)),
                                             };
-                                            add_array_type_from_ctor_sig(
-                                                tcx,
-                                                &export_sig,
-                                                &mut extern_arrays,
-                                            );
                                             let name_segment =
                                                 def_path.data[def_path.data.len() - 2];
                                             match name_segment.data {
                                                 DefPathData::TypeNs(name) => {
-                                                    let fn_key = FnKey::Independent(
-                                                        Ident::Original(name.to_ident_string()),
-                                                    );
+                                                    let fn_key =
+                                                        FnKey::Independent(TopLevelIdent {
+                                                            string: name.to_ident_string(),
+                                                            kind: TopLevelIdentKind::Function,
+                                                        });
                                                     extern_funcs.insert(fn_key, sig);
                                                 }
                                                 _ => (),
@@ -471,14 +826,15 @@ pub fn retrieve_external_functions(
             }
         }
     }
-    let items = &tcx.hir_crate(LOCAL_CRATE).items;
-    for (item_id, item) in items {
-        let item_id = tcx.hir().local_def_id(item_id.hir_id()).to_def_id();
+    for item_id in tcx.hir().items() {
+        let item = tcx.hir().item(item_id);
+        let item_def_id = item.def_id.to_def_id();
+
         match &item.kind {
-            ItemKind::Fn(_, _, _) => process_fn_id(
+            ItemKind::Fn(_, _, _) | ItemKind::Const(_, _) => process_fn_id(
                 sess,
                 tcx,
-                &item_id,
+                &item_def_id,
                 &LOCAL_CRATE,
                 &mut extern_funcs,
                 &mut extern_consts,
@@ -501,5 +857,12 @@ pub fn retrieve_external_functions(
             _ => (),
         }
     }
-    (extern_funcs, extern_consts, extern_arrays)
+    ExternalData {
+        funcs: extern_funcs,
+        consts: extern_consts,
+        arrays: extern_arrays,
+        nat_ints: extern_nat_ints,
+        enums: extern_enums,
+        ty_aliases,
+    }
 }

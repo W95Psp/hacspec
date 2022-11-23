@@ -44,9 +44,9 @@
 //!
 //! ```
 //! use abstract_integers::*;
-//! 
+//!
 //! abstract_public_nat_mod!(SizeNatFieldExample, SizeNatExample, 64, "1fffffffffffffff");
-//! 
+//!
 //! let x1 = SizeNatExample::from_literal(687165654266415);
 //! let x2 = SizeNatExample::from_literal(4298832000156);
 //! let x3 = x1 + x2;
@@ -61,11 +61,14 @@
 //! ```
 //!
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
 // Re-exports
-pub use num::{BigUint, BigInt, bigint::Sign, CheckedSub, Zero, traits, traits::identities::*};
-pub use std::num::ParseIntError;
-pub use std::ops::*;
-pub use std::cmp::Ordering;
+pub use core::cmp::Ordering;
+pub use core::num::ParseIntError;
+pub use core::ops::*;
+pub use num::{traits, traits::identities::*, CheckedSub, Zero};
+pub use num_bigint::{BigInt, BigUint, Sign};
 
 pub mod abstract_int;
 pub mod nat_mod;

@@ -4,24 +4,24 @@ macro_rules! modular_integer {
         #[derive(Clone, Copy, Default)]
         pub struct $name($base);
 
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        impl core::fmt::Display for $name {
+            fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
                 let uint: $base = (*self).into();
                 write!(f, "{}", uint)
             }
         }
 
-        impl std::fmt::Debug for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        impl core::fmt::Debug for $name {
+            fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
                 let uint: $base = (*self).into();
                 write!(f, "{}", uint)
             }
         }
 
-        impl std::fmt::LowerHex for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        impl core::fmt::LowerHex for $name {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 let val: $base = (*self).into();
-                std::fmt::LowerHex::fmt(&val, f)
+                core::fmt::LowerHex::fmt(&val, f)
             }
         }
 
@@ -137,6 +137,16 @@ macro_rules! modular_integer {
             pub fn comp_lt(self, rhs: Self) -> Self {
                 let x: $base = self.into();
                 x.comp_lt(rhs.into()).into()
+            }
+
+            /// Negate the value modulo max: `mod_value - self`
+            #[inline]
+            pub fn neg(self) -> Self {
+                let mod_val: BigInt = $max.into();
+                let s: $base = self.into();
+                let s: BigInt = s.into();
+                let result: $base = mod_val.sub(s).into();
+                result.into()
             }
         }
     };
@@ -332,19 +342,10 @@ macro_rules! abstract_public_modular_integer {
             }
         }
 
-        /// **Warning**: panics on division by 0.
         impl Div for $name {
             type Output = $name;
             fn div(self, rhs: $name) -> $name {
-                let a: $base = self.into();
-                let b: $base = rhs.into();
-                let a: BigUint = a.into();
-                let b: BigUint = b.into();
-                let c: BigUint = a / b;
-                let max: BigUint = $max.into();
-                let d: BigUint = c % max;
-                let d: $base = d.into();
-                d.into()
+                self * rhs.inv()
             }
         }
 

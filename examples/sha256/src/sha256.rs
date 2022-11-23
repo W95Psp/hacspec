@@ -8,15 +8,15 @@ pub const HASH_SIZE: usize = 256 / 8;
 
 bytes!(Block, BLOCK_SIZE);
 array!(OpTableType, 12, usize);
-bytes!(Digest, HASH_SIZE);
+bytes!(Sha256Digest, HASH_SIZE);
 array!(RoundConstantsTable, K_SIZE, U32);
 array!(Hash, 8, U32);
 
-fn ch(x: U32, y: U32, z: U32) -> U32 {
+pub fn ch(x: U32, y: U32, z: U32) -> U32 {
     (x & y) ^ ((!x) & z)
 }
 
-fn maj(x: U32, y: U32, z: U32) -> U32 {
+pub fn maj(x: U32, y: U32, z: U32) -> U32 {
     (x & y) ^ ((x & z) ^ (y & z))
 }
 
@@ -56,7 +56,7 @@ const HASH_INIT: Hash = Hash(secret_array!(
     ]
 ));
 
-fn sigma(x: U32, i: usize, op: usize) -> U32 {
+pub fn sigma(x: U32, i: usize, op: usize) -> U32 {
     let mut tmp: U32 = x.rotate_right(OP_TABLE[3 * i + 2]);
     if op == 0 {
         tmp = x >> OP_TABLE[3 * i + 2]
@@ -64,7 +64,7 @@ fn sigma(x: U32, i: usize, op: usize) -> U32 {
     x.rotate_right(OP_TABLE[3 * i]) ^ x.rotate_right(OP_TABLE[3 * i + 1]) ^ tmp
 }
 
-fn schedule(block: Block) -> RoundConstantsTable {
+pub fn schedule(block: Block) -> RoundConstantsTable {
     let b = block.to_be_U32s();
     let mut s = RoundConstantsTable::new();
     for i in 0..K_SIZE {
@@ -83,7 +83,7 @@ fn schedule(block: Block) -> RoundConstantsTable {
     s
 }
 
-fn shuffle(ws: RoundConstantsTable, hashi: Hash) -> Hash {
+pub fn shuffle(ws: RoundConstantsTable, hashi: Hash) -> Hash {
     let mut h = hashi;
     for i in 0..K_SIZE {
         let a0 = h[0];
@@ -110,7 +110,7 @@ fn shuffle(ws: RoundConstantsTable, hashi: Hash) -> Hash {
     h
 }
 
-fn compress(block: Block, h_in: Hash) -> Hash {
+pub fn compress(block: Block, h_in: Hash) -> Hash {
     let s = schedule(block);
     let mut h = shuffle(s, h_in);
     for i in 0..8 {
@@ -119,30 +119,37 @@ fn compress(block: Block, h_in: Hash) -> Hash {
     h
 }
 
-pub fn hash(msg: &ByteSeq) -> Digest {
+pub fn hash(msg: &ByteSeq) -> Sha256Digest {
     let mut h = HASH_INIT;
+    // FIXME: #96 use exact_chunks
+    let mut last_block = Block::new();
+    let mut last_block_len = 0;
     for i in 0..msg.num_chunks(BLOCK_SIZE) {
         let (block_len, block) = msg.get_chunk(BLOCK_SIZE, i);
         if block_len < BLOCK_SIZE {
-            // Add padding for last block
-            let mut last_block = Block::new();
-            let block = Block::new().update_start(&block);
-            last_block = last_block.update(0, &block);
-            last_block[block_len] = U8(0x80u8);
-            let len_bist = U64((msg.len() * 8) as u64);
-            if block_len < BLOCK_SIZE - LEN_SIZE {
-                last_block = last_block.update(BLOCK_SIZE - LEN_SIZE, &U64_to_be_bytes(len_bist));
-                h = compress(last_block, h);
-            } else {
-                let mut pad_block = Block::new();
-                pad_block = pad_block.update(BLOCK_SIZE - LEN_SIZE, &U64_to_be_bytes(len_bist));
-                h = compress(last_block, h);
-                h = compress(pad_block, h);
-            }
+            last_block = Block::new().update_start(&block);
+            last_block_len = block_len;
         } else {
-            let compress_input = Block::new().update_start(&block);
+            let compress_input = Block::from_seq(&block);
             h = compress(compress_input, h);
         }
     }
-    Digest::from_seq(&h.to_be_bytes())
+
+    last_block[last_block_len] = U8(0x80u8);
+    let len_bist = U64((msg.len() * 8) as u64);
+    if last_block_len < BLOCK_SIZE - LEN_SIZE {
+        last_block = last_block.update(BLOCK_SIZE - LEN_SIZE, &U64_to_be_bytes(len_bist));
+        h = compress(last_block, h);
+    } else {
+        let mut pad_block = Block::new();
+        pad_block = pad_block.update(BLOCK_SIZE - LEN_SIZE, &U64_to_be_bytes(len_bist));
+        h = compress(last_block, h);
+        h = compress(pad_block, h);
+    }
+
+    Sha256Digest::from_seq(&h.to_be_bytes())
+}
+
+pub fn sha256(msg: &ByteSeq) -> Sha256Digest {
+    hash(msg)
 }
