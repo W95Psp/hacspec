@@ -811,3 +811,28 @@ val nat_from_zero_bytes (#len:size_nat) (b:Lib.ByteSequence.lbytes len)
   : Lemma (requires (forall i. v b.[i] == 0))
           (ensures (Lib.ByteSequence.nat_from_bytes_le b == 0))
 let nat_from_zero_bytes #len b = admit()
+
+let expand_subtraction (a b d: int): Lemma ((a - b) * d == a * d - b * d) = ()
+let division_order_lemma_ge (a b:nat) (d:pos): Lemma (requires a >= b) (ensures a/d >= b/d)
+  = let ka, kb = a/d, b/d in
+    Math.Lemmas.euclidean_division_definition a d;
+    Math.Lemmas.euclidean_division_definition b d;
+    if ka < kb then expand_subtraction kb ka d else ()
+
+let division_order_lemma_gt (a b:nat) (d:pos): Lemma (requires a > b) (ensures a/d >= b/d)
+  = division_order_lemma_ge a b d
+
+
+/// if [a·k < b < (a+1)·k], then [b - a·k == b % k]
+let framed_mod_lemma (a b: nat) (k: pos)
+  : Lemma (requires a * k < b 
+                          /\ b < (a + 1) * k)
+          (ensures  b - a * k == b % k)
+  = let kb, rb = b / k, b % k in
+    Math.Lemmas.euclidean_division_definition b k;
+    Math.Lemmas.small_div rb k;
+    if kb > a then division_order_lemma_gt (a + 1) (kb * k + rb) k
+    else if kb < a then (division_order_lemma_gt (k * kb + rb) (a * k) k;
+                         Math.Lemmas.cancel_mul_div  a k;      
+                         Math.Lemmas.cancel_mul_div kb k)
+
