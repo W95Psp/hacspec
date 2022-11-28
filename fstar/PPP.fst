@@ -122,11 +122,6 @@ let equiv_encrypt_last (st0:state_t) (ctr:uint32) (plain: byte_seq {seq_len plai
           [SMTPat (H.chacha20_encrypt_last st0 ctr plain)]
   = ()
 
-let s_chacha20_update (ctx: S.state) (cipher: seq (int_t U8 SEC)): seq _ =
-  Lib.Sequence.map_blocks 64 cipher
-    (S.chacha20_encrypt_block ctx)
-    (S.chacha20_encrypt_last ctx)
-
   // (f:(Seq.block (Seq.length input) blocksize -> lseq 'a blocksize -> lseq 'a blocksize))
   // (g:(Seq.last (Seq.length input) blocksize -> rem:size_nat{rem < blocksize} -> s:lseq 'a rem -> lseq 'a rem))
 
@@ -222,14 +217,15 @@ let map_blocks_f_equiv_lemma
   (original_s: lseq 'a len)
   (f:(i:nat{i < max}) -> lseq 'a blocksize -> lseq 'a blocksize)
   (i: nat{i < max})
-  (updated_s: lseq 'a len {forall (j:nat{j >= i * blocksize /\ j < len}). FStar.Seq.index original_s j == FStar.Seq.index updated_s j})
+  (updated_s: lseq 'a len)
+  // (updated_s: lseq 'a len {forall (j:nat{j >= i * blocksize /\ j < len}). FStar.Seq.index original_s j == FStar.Seq.index updated_s j})
   (acc: lseq 'a (i * blocksize) {forall (j:nat{j < i * blocksize}). FStar.Seq.index acc j == FStar.Seq.index updated_s j})
   // (acc: lseq 'a (i * blocksize) {acc == FStar.Seq.slice updated_s 0 (i * blocksize)})
   : Lemma (
           let slice_s = FStar.Seq.slice original_s 0 (max * blocksize) in
           forall (j: nat{j < (i+1) * blocksize}).
             FStar.Seq.index (Seq.map_blocks_f blocksize max slice_s f i acc) j
-         == FStar.Seq.index (seq_set_exact_chunk #_ #len updated_s blocksize i (f i (seq_get_exact_chunk updated_s blocksize i))) j
+         == FStar.Seq.index (seq_set_exact_chunk #_ #len updated_s blocksize i (f i (seq_get_exact_chunk original_s blocksize i))) j
     )
   = let slice_s = FStar.Seq.slice original_s 0 (max * blocksize) in
     Math.Lemmas.lemma_mult_le_right blocksize (i+1) max;
@@ -239,8 +235,8 @@ let map_blocks_f_equiv_lemma
 
     let idx_start = blocksize * i in
     let out_len = seq_chunk_len updated_s blocksize i in
-    let new_block = f i (seq_get_exact_chunk updated_s blocksize i) in
-    assert (Seq.equal block (seq_get_exact_chunk updated_s blocksize i));
+    let new_block = f i (seq_get_exact_chunk original_s blocksize i) in
+    // assert (Seq.equal block (seq_get_exact_chunk updated_s blocksize i));
     assert (f i block == new_block);
 
     let r2 = Seq.update_sub updated_s idx_start out_len new_block in
@@ -258,7 +254,7 @@ let map_blocks_f_equiv_lemma
       = if j >= i * blocksize
         then (
           assert (FStar.Seq.index r1 j == FStar.Seq.index (f i block) (j - i * blocksize));
-          assert (FStar.Seq.index r2 j == FStar.Seq.index (f i (seq_get_exact_chunk updated_s blocksize i)) (j - i * blocksize));
+          assert (FStar.Seq.index r2 j == FStar.Seq.index (f i (seq_get_exact_chunk original_s blocksize i)) (j - i * blocksize));
           assert (FStar.Seq.index r1 j == FStar.Seq.index r2 j)
         ) else (
           assert (FStar.Seq.index r1 j == FStar.Seq.index acc j);
@@ -279,19 +275,20 @@ let map_blocks_f_equiv_lemma
 unfold let map_blocks_foldi_fun
   (len: uint_size) (blocksize: size_pos)
   (max: uint_size {max * blocksize <= len})
+  (original_s: lseq 'a len)
   (f:(i:nat{i < max}) -> lseq 'a blocksize -> lseq 'a blocksize)
-  (i: nat{i<max}) (s: lseq 'a len)
-  = seq_set_exact_chunk #_ #len s blocksize i (f i (seq_get_exact_chunk s blocksize i))
+  (i: uint_size{i<max}) (s: lseq 'a len)
+  = seq_set_exact_chunk #'a #len s blocksize i (f i (seq_get_exact_chunk #'a original_s blocksize i))
 
-#push-options "--z3rlimit 40"
 let map_blocks_foldi_fun_preserve_above
   (len: uint_size) (blocksize: size_pos)
   (max: uint_size {max * blocksize <= len})
+  (original_s: lseq 'a len)
   (f:(i:nat{i < max}) -> lseq 'a blocksize -> lseq 'a blocksize)
-  (i: nat{i < max}) (s: lseq 'a len)
+  (i: uint_size{i < max}) (s: lseq 'a len)
   : Lemma (
     forall (j:nat{j >= blocksize * (i+1) /\ j < len}).
-       FStar.Seq.index (map_blocks_foldi_fun len blocksize max f i s) j
+       FStar.Seq.index (map_blocks_foldi_fun len blocksize max original_s f i s) j
     == FStar.Seq.index s j
   )
   = let r = seq_set_exact_chunk #_ #len s blocksize i (f i (seq_get_exact_chunk s blocksize i)) in
@@ -305,7 +302,7 @@ let map_blocks_foldi_fun_preserve_above
       else blocksize
     ));
     let r'
-        = Seq.update_sub s idx_start out_len (f i (seq_get_exact_chunk s blocksize i)) in
+        = Seq.update_sub s idx_start out_len (f i (seq_get_exact_chunk original_s blocksize i)) in
     assert ((forall (k:nat{(0 <= k /\ k < blocksize * i) \/ (blocksize * i + out_len <= k /\ k < len)}).
        Seq.index r' k == Seq.index s k));
     if blocksize * (i + 1) > Seq.length s
@@ -317,10 +314,11 @@ unfold let map_blocks_foldi
     (#len: uint_size) (blocksize: size_pos)
     (max: uint_size {max * blocksize <= len})
     (n: uint_size {n * blocksize <= len /\ n <= max})
+    (original_s: lseq 'a len)
     (s: lseq 'a len)
-    (f:(i:nat{i < max}) -> lseq 'a blocksize -> lseq 'a blocksize)
+    (f:(i:uint_size{i < max}) -> lseq 'a blocksize -> lseq 'a blocksize)
     : lseq 'a len
-  = foldi 0 n (map_blocks_foldi_fun len blocksize max f) s
+  = foldi #(lseq 'a len) 0 n (map_blocks_foldi_fun len blocksize max original_s f) s
 
 let rec foldi_extensionality_squash
   (lo: uint_size)
@@ -347,105 +345,113 @@ let foldi_extensionality
   : Lemma (foldi lo hi f init == foldi lo hi g init)
   = foldi_extensionality_squash lo hi f g init
 
-#push-options "--ifuel 0 --fuel 0 --z3rlimit 15 --split_queries"
-let map_blocks_foldi_fun_simplify
-  (#len: uint_size) (blocksize: size_pos)
-  (max: uint_size {max * blocksize <= len})
-  (n: uint_size {n * blocksize <= len /\ n <= max})
-  (s: lseq 'a len)
-  (f:(i:nat{i < max}) -> lseq 'a blocksize -> lseq 'a blocksize)
-  : squash (
-       foldi 0 n (map_blocks_foldi_fun len blocksize max f) s
-    == foldi 0 n (fun (i: nat{i<max}) (s: lseq 'a len) -> seq_set_exact_chunk #'a #len s blocksize i (f i (seq_get_exact_chunk s blocksize i))) s
-  ) = foldi_extensionality_squash 0 n
-                                  (map_blocks_foldi_fun len blocksize max f)
-                                  (fun (i: nat{i<max}) (s: lseq 'a len) -> seq_set_exact_chunk #'a #len s blocksize i (f i (seq_get_exact_chunk s blocksize i)))
-                                  s
-#pop-options
+// #push-options "--ifuel 0 --fuel 0 --z3rlimit 15 --split_queries"
+// let map_blocks_foldi_fun_simplify
+//   (#len: uint_size) (blocksize: size_pos)
+//   (max: uint_size {max * blocksize <= len})
+//   (n: uint_size {n * blocksize <= len /\ n <= max})
+//   (s: lseq 'a len)
+//   (f:(i:nat{i < max}) -> lseq 'a blocksize -> lseq 'a blocksize)
+//   : squash (
+//        foldi 0 n (map_blocks_foldi_fun len blocksize max f) s
+//     == foldi 0 n (fun (i: nat{i<max}) (s: lseq 'a len) -> seq_set_exact_chunk #'a #len s blocksize i (f i (seq_get_exact_chunk s blocksize i))) s
+//   ) = foldi_extensionality_squash 0 n
+//                                   (map_blocks_foldi_fun len blocksize max f)
+//                                   (fun (i: nat{i<max}) (s: lseq 'a len) -> seq_set_exact_chunk #'a #len s blocksize i (f i (seq_get_exact_chunk s blocksize i)))
+//                                   s
+// #pop-options
 
-#push-options "--z3rlimit 20 --split_queries"
-let map_blocks_foldi_simplify
-  (#len: uint_size) (blocksize: size_pos)
-  (max: uint_size {max * blocksize <= len})
-  (n: uint_size {n * blocksize <= len /\ n <= max})
-  (s: lseq 'a len)
-  (f:(i:nat{i < max}) -> lseq 'a blocksize -> lseq 'a blocksize)
-  : Lemma (
-       map_blocks_foldi blocksize max n s f
-    == foldi 0 n (fun (i: nat{i<max}) (s: lseq 'a len) -> seq_set_exact_chunk #'a #len s blocksize i (f i (seq_get_exact_chunk s blocksize i))) s
-  ) = map_blocks_foldi_fun_simplify blocksize max n s f
-#pop-options
+// #push-options "--z3rlimit 20 --split_queries"
+// let map_blocks_foldi_simplify
+//   (#len: uint_size) (blocksize: size_pos)
+//   (max: uint_size {max * blocksize <= len})
+//   (n: uint_size {n * blocksize <= len /\ n <= max})
+//   (s: lseq 'a len)
+//   (f:(i:nat{i < max}) -> lseq 'a blocksize -> lseq 'a blocksize)
+//   : Lemma (
+//        map_blocks_foldi blocksize max n s f
+//     == foldi 0 n (fun (i: nat{i<max}) (s: lseq 'a len) -> seq_set_exact_chunk #'a #len s blocksize i (f i (seq_get_exact_chunk s blocksize i))) s
+//   ) = map_blocks_foldi_fun_simplify blocksize max n s f
+// #pop-options
 
 #push-options "--z3rlimit 40"
 let rec map_blocks_foldi_preserves
     (len: uint_size) (blocksize: size_pos)
     (max: uint_size {max * blocksize <= len})
     (n: uint_size {n * blocksize <= len /\ n <= max})
+    (original_s: lseq 'a len)
     (s0: lseq 'a len)
-    (f:(i:nat{i < max}) -> lseq 'a blocksize -> lseq 'a blocksize)
-  : Lemma (forall (i:nat{i >= blocksize * n /\ i < len}). FStar.Seq.index s0 i == FStar.Seq.index (map_blocks_foldi blocksize max n s0 f) i)
+    (f:(i:uint_size{i < max}) -> lseq 'a blocksize -> lseq 'a blocksize)
+  : Lemma (forall (i:nat{i >= blocksize * n /\ i < len}). FStar.Seq.index s0 i == FStar.Seq.index (map_blocks_foldi blocksize max n original_s s0 f) i)
    = if n = 0
-     then unfold_foldi 0 0 (map_blocks_foldi_fun len blocksize max f) s0
+     then unfold_foldi 0 0 (map_blocks_foldi_fun len blocksize max original_s f) s0
      else (
-       unfold_left_foldi 0 n (map_blocks_foldi_fun len blocksize max f) s0;
+       unfold_left_foldi 0 n (map_blocks_foldi_fun len blocksize max original_s f) s0;
        assert (
-            map_blocks_foldi_fun len blocksize max f (n - 1) (map_blocks_foldi blocksize max (n - 1) s0 f)
-         == map_blocks_foldi blocksize max n s0 f
+            map_blocks_foldi_fun len blocksize max original_s f (n - 1) (map_blocks_foldi blocksize max (n - 1) original_s s0 f)
+         == map_blocks_foldi blocksize max n original_s s0 f
        );
-       map_blocks_foldi_preserves len blocksize max (n - 1) s0 f;
-       assert (forall (i:nat{i >= blocksize * (n-1) /\ i < len}). FStar.Seq.index s0 i == FStar.Seq.index (map_blocks_foldi blocksize max (n-1) s0 f) i);
+       map_blocks_foldi_preserves len blocksize max (n - 1) original_s s0 f;
+       assert (forall (i:nat{i >= blocksize * (n-1) /\ i < len}). FStar.Seq.index s0 i == FStar.Seq.index (map_blocks_foldi blocksize max (n-1) original_s s0 f) i);
        introduce forall (i: nat{i < max}) (s: lseq 'a len). forall (j:nat{j >= blocksize * (i+1) /\ j < len}).
-                          FStar.Seq.index (map_blocks_foldi_fun len blocksize max f i s) j
+                          FStar.Seq.index (map_blocks_foldi_fun len blocksize max original_s f i s) j
                        == FStar.Seq.index s j
-            with map_blocks_foldi_fun_preserve_above len blocksize max f i s;
+            with map_blocks_foldi_fun_preserve_above len blocksize max original_s f i s;
        ()
      )
 #pop-options
 
-#push-options "--print_implicits"
-unfold let direct_statement
-    (len: uint_size) (blocksize: size_pos)
-    (max: uint_size {max * blocksize <= len})
-    (n: uint_size {n * blocksize <= len /\ n <= max})
-    (s: lseq 'a len)
-    (f:(i:nat{i < max}) -> lseq 'a blocksize -> lseq 'a blocksize)
-  = let slice_s = FStar.Seq.slice s 0 (max * blocksize) in
-    let r1: Seq.map_blocks_a 'a blocksize max n = LC.repeat_gen n (Seq.map_blocks_a 'a blocksize max) (Seq.map_blocks_f blocksize max slice_s f) FStar.Seq.empty in
-    let r2 = map_blocks_foldi blocksize max n s f in
-    (forall (i:nat{i < blocksize * n}). FStar.Seq.index r1 i == FStar.Seq.index r2 i)
-
-// #push-options "--fuel 0 --ifuel 0 --z3rlimit 150 --split_queries"
 #push-options "--fuel 0 --ifuel 0 --z3rlimit 50"
 let rec direct
   (len: uint_size) (blocksize: size_pos)
   (max: uint_size {max * blocksize <= len})
   (n: uint_size {n * blocksize <= len /\ n <= max})
+  (original_s: lseq 'a len)
   (s: lseq 'a len)
-  (f:(i:nat{i < max}) -> lseq 'a blocksize -> lseq 'a blocksize)
-  : Lemma (ensures direct_statement len blocksize max n s f) (decreases n)
+  (f:(i:uint_size{i < max}) -> lseq 'a blocksize -> lseq 'a blocksize)
+  : Lemma (ensures (
+    let slice_s = FStar.Seq.slice original_s 0 (max * blocksize) in
+    let r1 = LC.repeat_gen n (Seq.map_blocks_a 'a blocksize max) (Seq.map_blocks_f blocksize max slice_s f) FStar.Seq.empty in
+    let r2 = map_blocks_foldi blocksize max n original_s s f in
+    (forall (i:nat{i < blocksize * n}). FStar.Seq.index r1 i == FStar.Seq.index r2 i)
+  )) (decreases n)
   = if n <> 0 then begin
       let n': uint_size = n - 1 in
-      let slice_s = FStar.Seq.slice s 0 (max * blocksize) in
-      
+      let slice_s = FStar.Seq.slice original_s 0 (max * blocksize) in
       let r1' = LC.repeat_gen (n-1) (Seq.map_blocks_a 'a blocksize max) (Seq.map_blocks_f blocksize max slice_s f) FStar.Seq.empty in
-      let r2' = map_blocks_foldi blocksize max (n - 1) s f in
+      let r2' = map_blocks_foldi blocksize max (n - 1) original_s s f in
       let all1 = Seq.map_blocks_f blocksize max slice_s f (n-1) r1' in
-      let all2 = seq_set_exact_chunk #_ #len r2' blocksize (n-1) (f (n-1) (seq_get_exact_chunk r2' blocksize (n-1))) in
+      let all2 = seq_set_exact_chunk #_ #len r2' blocksize (n-1) (f (n-1) (seq_get_exact_chunk original_s blocksize (n-1))) in
       let _: squash (forall (i:nat{i < blocksize * (n - 1)}). FStar.Seq.index r1' i == FStar.Seq.index r2' i)
-        = direct len blocksize max (n - 1) s f;
-          assert (direct_statement len blocksize max (n - 1) s f);
+        = direct len blocksize max (n - 1) original_s s f;
           assert ((forall (i:nat{i < blocksize * (n - 1)}). FStar.Seq.index r1' i == FStar.Seq.index r2' i))
       in
-      map_blocks_foldi_preserves len blocksize max (n-1) s f;
-      map_blocks_f_equiv_lemma len blocksize max s f (n-1) r2' r1';
+      map_blocks_foldi_preserves len blocksize max (n-1) original_s s f;
+      map_blocks_f_equiv_lemma len blocksize max original_s f (n-1) r2' r1';
       assert (forall (j: nat{j < n * blocksize}). FStar.Seq.index all1 j == FStar.Seq.index all2 j);
-      unfold_left_foldi 0 n (map_blocks_foldi_fun len blocksize max f) s;
+      unfold_left_foldi 0 n (map_blocks_foldi_fun len blocksize max original_s f) s;
       LC.unfold_repeat_gen n (Seq.map_blocks_a 'a blocksize max) (Seq.map_blocks_f blocksize max slice_s f) FStar.Seq.empty (n - 1)
     end
 #pop-options
 
+let direct'
+  (#len: uint_size) (blocksize: size_pos)
+  (max: uint_size {max * blocksize <= len})
+  (n: uint_size {n * blocksize <= len /\ n <= max})
+  (original_s: lseq 'a len)
+  (s: lseq 'a len)
+  (f:(i:uint_size{i < max}) -> lseq 'a blocksize -> lseq 'a blocksize)
+  : Lemma (ensures (
+    let slice_s = FStar.Seq.slice original_s 0 (max * blocksize) in
+    let r1 = Seq.map_blocks_multi blocksize max n slice_s f in
+    let r2 = map_blocks_foldi blocksize max n original_s s f in
+    (forall (i:nat{i < blocksize * n}). FStar.Seq.index r1 i == FStar.Seq.index r2 i)
+  )) (decreases n)
+  = Seq.lemma_map_blocks_multi blocksize max n (FStar.Seq.slice original_s 0 (max * blocksize)) f;
+    direct len blocksize max n original_s s f
+
 #push-options "--z3rlimit 160"
-let s_chacha20_update' (ctx: S.state) (cipher: seq (int_t U8 SEC)): (r:seq _{r==s_chacha20_update ctx cipher}) =
+let s_chacha20_update' (ctx: S.state) (cipher: seq (int_t U8 SEC)): (r:seq _{r==S.chacha20_update ctx cipher}) =
   Seq.lemma_map_blocks 64 cipher (S.chacha20_encrypt_block ctx) (S.chacha20_encrypt_last ctx);
   let len = Seq.length cipher in
   let nb  = len / 64 in
@@ -467,7 +473,7 @@ let s_chacha20_update' (ctx: S.state) (cipher: seq (int_t U8 SEC)): (r:seq _{r==
 
   FStar.Seq.append_empty_r bs;
   let r = FStar.Seq.append bs (S.chacha20_encrypt_last ctx nb rem last) in
-  assert (r==s_chacha20_update ctx cipher);
+  assert (r==S.chacha20_update ctx cipher);
   // Classical.forall_intro aux;
   r
 #pop-options
@@ -495,6 +501,10 @@ let chacha20_update0 (st0 : state_t) (cipher : byte_seq): lseq uint8 (FStar.Seq.
   in
   foldi 0 n_blocks (fun (i: uint_size{i<n_blocks}) (s: lseq _ (seq_len #uint8 cipher)) -> seq_set_exact_chunk s 64 i (f i)) blocks_out
 
+#push-options "--print_universes --print_bound_var_types"
+
+let manual_rewrite (): Lemma (uint8 == int_t U8 SEC) = ()
+
 let chacha20_update0' (st0 : state_t) (cipher : byte_seq): lseq uint8 (FStar.Seq.length cipher) =
   let blocks_out: seq uint8 = seq_new_ (secret (pub_u8 0x0)) (seq_len cipher) in
   let n_blocks: uint_size = seq_num_exact_chunks cipher 64 in
@@ -505,68 +515,86 @@ let chacha20_update0' (st0 : state_t) (cipher : byte_seq): lseq uint8 (FStar.Seq
     chacha20_encrypt_block st0 (secret (pub_u32 i)) (array_from_seq 64 msg_block)
   in
   let r0 = foldi 0 n_blocks (fun (i: uint_size{i<n_blocks}) (s: lseq uint8 (seq_len #uint8 cipher)) -> seq_set_exact_chunk #uint8 #(seq_len #uint8 cipher) s 64 i (f0 i)) blocks_out in
-  
-  // let r1 = foldi 0 n_blocks (fun (i: uint_size{i<n_blocks}) (s: lseq uint8 (FStar.Seq.length #uint8 cipher)) -> seq_set_exact_chunk s 64 i (f0 i)) blocks_out in
-  // let proof
-  //   : squash (
-  //      foldi 0 n_blocks (fun (i: uint_size{i<n_blocks}) (s: lseq uint8 (seq_len #uint8 cipher)) -> seq_set_exact_chunk #uint8 #(seq_len #uint8 cipher) s 64 i (f0 i)) blocks_out
-  //   == foldi 0 n_blocks (fun (i: uint_size{i<n_blocks}) (s: lseq uint8 (FStar.Seq.length #uint8 cipher)) -> seq_set_exact_chunk s 64 i (f0 i)) blocks_out
-  // ) =
-  //   foldi_extensionality 0 n_blocks (fun (i: uint_size{i<n_blocks}) (s: lseq uint8 (seq_len #uint8 cipher)) -> seq_set_exact_chunk #uint8 #(seq_len #uint8 cipher) s 64 i (f0 i))
-  //                                 (fun (i: uint_size{i<n_blocks}) (s: lseq uint8 (FStar.Seq.length #uint8 cipher)) -> seq_set_exact_chunk s 64 i (f0 i))
-  //                                 blocks_out in
-// assert (foldi 0 n_blocks (fun (i: uint_size{i<n_blocks}) (s: lseq uint8 (seq_len #uint8 cipher)) -> seq_set_exact_chunk #uint8 #(seq_len #uint8 cipher) s 64 i (f0 i)) blocks_out
-//     == foldi 0 n_blocks (fun (i: uint_size{i<n_blocks}) (s: lseq uint8 (FStar.Seq.length #uint8 cipher)) -> seq_set_exact_chunk s 64 i (f0 i)) blocks_out);
-//   assert (r0 == foldi 0 n_blocks (fun (i: uint_size{i<n_blocks}) (s: lseq uint8 (seq_len #uint8 cipher)) -> seq_set_exact_chunk #uint8 #(seq_len #uint8 cipher) s 64 i (f0 i)) blocks_out);
-//   assert (r1 == foldi 0 n_blocks (fun (i: uint_size{i<n_blocks}) (s: lseq uint8 (FStar.Seq.length #uint8 cipher)) -> seq_set_exact_chunk s 64 i (f0 i)) blocks_out);
+
+  let rr = foldi #(lseq (int_t U8 SEC) (seq_len #(int_t U8 SEC) cipher))
+          0
+          (seq_num_exact_chunks #(int_t U8 SEC) cipher 64)
+          (fun (i: uint_size{i<n_blocks}) (s: lseq (int_t U8 SEC) (seq_len #(int_t U8 SEC) cipher)) ->
+              seq_set_exact_chunk #(int_t U8 SEC)
+                #(seq_len #(int_t U8 SEC) cipher)
+                s
+                64
+                i
+                (chacha20_encrypt_block st0
+                    (secret #U32 (pub_u32 i))
+                    (array_from_seq #(int_t U8 SEC)
+                        64
+                        (seq_get_exact_chunk #(int_t U8 SEC) cipher 64 i))
+                  <:
+                  Prims.Tot block_t))
+          (seq_new_ #(int_t U8 SEC) (secret #U8 (pub_u8 0x0)) (seq_len #(int_t U8 SEC) cipher)) in
 
   let f2 (i: nat {i<n_blocks}) (msg_block: lseq uint8 64): block_t = 
     chacha20_encrypt_block st0 (secret (pub_u32 i)) (array_from_seq 64 msg_block)
   in
-  let r2 = map_blocks_foldi #uint8 #(seq_len cipher) 64 n_blocks n_blocks blocks_out f2 in
+  let r2 = map_blocks_foldi #uint8 #(seq_len cipher) 64 n_blocks n_blocks cipher blocks_out f2 in
 
-  assert (r2 == r0) by (
-    norm [delta_only [`%map_blocks_foldi;`%map_blocks_foldi_fun;`%uint8]];
-    // compute ()
-    fail "x"
-  );
+  assert (r0 == r2);
 
   r0
 
-// let chacha20_update0_equiv (st0 : state_t) (cipher : byte_seq)
-//   : Lemma (chacha20_update0 st0 cipher == chacha20_update0' st0 cipher)
-//   = assert (chacha20_update0 st0 cipher == chacha20_update0' st0 cipher) by
-
-#push-options "--z3rlimit 160"
 let chacha20_update_ (st0 : state_t) (cipher : byte_seq) 
-  : r:byte_seq{r == chacha20_update st0 cipher} =
+  : r:byte_seq{ r == H.chacha20_update st0 cipher
+              /\ r == S.chacha20_update st0 cipher
+              } =
   let blocks_out: seq uint8 = seq_new_ (secret (pub_u8 0x0)) (seq_len cipher) in
   let n_blocks: uint_size = seq_num_exact_chunks cipher 64 in
-  
-  let f (i: nat {i<n_blocks}): block_t = 
+
+  let f0 (i: nat {i<n_blocks}): block_t = 
     let msg_block: seq uint8 = seq_get_exact_chunk cipher 64 i in
     chacha20_encrypt_block st0 (secret (pub_u32 i)) (array_from_seq 64 msg_block)
   in
-  let blocks_out = foldi 0 n_blocks (fun (i: uint_size{i<n_blocks}) (s: lseq uint8 (seq_len #uint8 cipher)) -> seq_set_exact_chunk #uint8 #(seq_len #uint8 cipher) s 64 i (f i)) blocks_out in
-  // let blocks_out' = foldi 0 n_blocks (fun (i: uint_size{i<n_blocks}) (s: lseq _ (Seq.length cipher)) -> seq_set_exact_chunk s 64 i (f i)) blocks_out in
+  let blocks_out1 = foldi 0 n_blocks (fun (i: uint_size{i<n_blocks}) (s: lseq uint8 (seq_len #uint8 cipher)) -> seq_set_exact_chunk #uint8 #(seq_len #uint8 cipher) s 64 i (f0 i)) blocks_out in
+
+  let f2 (i: nat {i<n_blocks}) (msg_block: lseq uint8 64): block_t = 
+    chacha20_encrypt_block st0 (secret (pub_u32 i)) (array_from_seq 64 msg_block)
+  in
+  let blocks_out2 = map_blocks_foldi #uint8 #(seq_len cipher) 64 n_blocks n_blocks cipher blocks_out f2 in
+
+  assert (forall x y. S.chacha20_encrypt_block st0 x y == f2 x y);
+  
+  let blocks_out3 = Seq.map_blocks 64 cipher (S.chacha20_encrypt_block st0) (S.chacha20_encrypt_last st0) in
+  let blocks_out4 = Seq.map_blocks 64 cipher f2 (S.chacha20_encrypt_last st0) in
+  Lib.Sequence.Lemmas.map_blocks_extensionality 64 cipher (S.chacha20_encrypt_block st0) (S.chacha20_encrypt_last st0) f2 (S.chacha20_encrypt_last st0);
+
+  Seq.lemma_map_blocks 64 cipher f2 (S.chacha20_encrypt_last st0);
+  let len = Seq.length cipher in
+  let nb  = len / 64 in
+  let rem = len % 64 in
+  let blocks = Seq.slice #_ #(seq_len cipher) cipher 0 (nb * 64) in
+  let last   = Seq.slice #_ #(seq_len cipher) cipher (nb * 64) len in
+  Math.Lemmas.cancel_mul_div nb 64;
+  let bs: seq _ = Seq.map_blocks_multi 64 nb nb blocks f2 in
+
+  FStar.Seq.append_empty_r bs;
+  let r_map = FStar.Seq.append bs (S.chacha20_encrypt_last st0 nb rem last) in
+  direct' #uint8 #(seq_len cipher) 64 n_blocks n_blocks cipher blocks_out f2;
+  assert (forall (i:nat{i < 64 * nb}). FStar.Seq.index r_map i == FStar.Seq.index blocks_out2 i);
+
   
   let last_block: seq uint8 = seq_get_remainder_chunk cipher 64 in
   if seq_len last_block <> 0 then
     let b : seq uint8 = chacha20_encrypt_last st0 (secret (pub_u32 n_blocks)) last_block in
-    seq_set_chunk (blocks_out <: lseq _ (seq_len cipher)) 64 n_blocks b
-  else blocks_out
+    // assert (S.chacha20_encrypt_last st0 nb rem last == b);
+    let r = seq_set_chunk (blocks_out2 <: lseq _ (seq_len cipher)) 64 n_blocks b in
+    assert (Seq.equal r_map r);
+    r
+  else (
+    assert (Seq.equal r_map blocks_out2);
+    blocks_out2
+  )
 
-let chacha20_update_ (st0 : state_t) (cipher : byte_seq) =
-  // : byte_seq =
-  let blocks_out: seq uint8 = seq_new_ (secret (pub_u8 0x0)) (seq_len cipher) in
-  let n_blocks: uint_size = seq_num_exact_chunks cipher 64 in
-  let f (i: nat {i<n_blocks}) (msg_block: lseq uint8 64): block_t = 
-    chacha20_encrypt_block st0 (secret (pub_u32 i)) (array_from_seq 64 msg_block)
-  in
-  let blocks_out = map_blocks_foldi 64 n_blocks n_blocks blocks_out f in
-  let last_block: seq uint8 = seq_get_remainder_chunk cipher 64 in
-  if seq_len last_block <> 0 then
-    let b : seq uint8 = chacha20_encrypt_last st0 (secret (pub_u32 n_blocks)) last_block in
-    seq_set_chunk (blocks_out <: lseq _ (seq_len cipher)) 64 n_blocks b
-  else blocks_out
-
+let chacha20_update_equiv (st0 : state_t) (cipher : byte_seq)
+  : Lemma (S.chacha20_update st0 cipher == H.chacha20_update st0 cipher)
+  = let _ = chacha20_update_ st0 cipher in
+    ()
