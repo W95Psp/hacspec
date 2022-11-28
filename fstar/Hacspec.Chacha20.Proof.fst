@@ -4,7 +4,7 @@ open Hacspec.Lib
 open FStar.Mul
 
 module Orig = Spec.Chacha20
-module New = Hacspec.Chacha20.Edited
+module New = Hacspec.Chacha20
 module Seq = Lib.Sequence
 
 #set-options "--fuel 0 --ifuel 0 --z3rlimit 30"
@@ -23,10 +23,7 @@ let line_equiv
   assert(New.chacha20_line a b d s m `Seq.equal` Orig.line a b d (size s) m)
 
 let quarter_round_equiv
-  (a : New.state_idx)
-  (b : New.state_idx)
-  (c : New.state_idx)
-  (d : New.state_idx)
+  (a b c d: New.state_idx)
   (state : New.state)
     : Lemma (New.chacha20_quarter_round a b c d state == Orig.quarter_round a b c d state)
   [SMTPat (New.chacha20_quarter_round a b c d state)]
