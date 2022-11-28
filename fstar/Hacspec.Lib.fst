@@ -167,7 +167,7 @@ let foldi_equiv_repeat_right
   : Lemma (foldi lo hi f init == Lib.LoopCombinators.repeat_right lo hi (Lib.LoopCombinators.fixed_a 'a) f init)
   = admit ()
 
-let unfold_left_foldi
+let unfold_foldi_right
   (lo: uint_size)
   (hi: uint_size{lo < hi})
   (f: (i:uint_size{i < hi}) -> 'a -> 'a)
@@ -176,6 +176,14 @@ let unfold_left_foldi
   = foldi_equiv_repeat_right lo hi f init;
     Lib.LoopCombinators.unfold_repeat_right lo hi (Lib.LoopCombinators.fixed_a 'a) f init (hi - 1);
     foldi_equiv_repeat_right lo (hi-1) f init
+
+let unfold_foldi (lo: uint_size) (hi: uint_size{lo <= hi})
+                 (f: (i:uint_size{i < hi}) -> 'a -> 'a)
+                 (init: 'a)
+  : Lemma (foldi lo hi f init == (if lo = hi then init else
+                                 foldi (lo + 1) hi f (f lo init)))
+  = assert_norm ((foldi lo hi f init == (if lo = hi then init else
+                                 foldi (lo + 1) hi f (f lo init))))
 
 let rec foldi_result_
   (#acc_ok: Type)

@@ -3,16 +3,15 @@ module Hacspec.Poly1305.Proof
 open Hacspec.Lib
 open FStar.Mul
 
-module Orig = Spec.Poly1305
-module New = Hacspec.Poly1305.Edited
+module S = Spec.Poly1305
+module H = Hacspec.Poly1305
 module Seq = Lib.Sequence
 
 #set-options "--fuel 0 --ifuel 0 --z3rlimit 30"
 
-let poly1305_encode_r_equiv (b:New.poly_block)
-  : Lemma (New.poly1305_encode_r b ==
-           Orig.poly1305_encode_r b)
-           [SMTPat (New.poly1305_encode_r b)] =
+let poly1305_encode_r_equiv (b:H.poly_block_t)
+  : Lemma (H.poly1305_encode_r b == S.poly1305_encode_r b)
+          [SMTPat (H.poly1305_encode_r b)] =
   let n_1 = uint128_from_le_bytes (array_from_seq (16) (b)) in
   let lo : uint64 = Lib.ByteSequence.uint_from_bytes_le (Lib.Sequence.sub b 0 8) in
   let hi : uint64 = Lib.ByteSequence.uint_from_bytes_le (Lib.Sequence.sub b 8 8) in
@@ -39,18 +38,17 @@ let poly1305_encode_r_equiv (b:New.poly_block)
   logand_uint64_uint128 (v lo) (v mask0) (v hi) (v mask1);
   ()
 
-let prime_equiv:_:unit{Orig.prime == 0x03fffffffffffffffffffffffffffffffb} =
-  assert_norm(Orig.prime == 0x03fffffffffffffffffffffffffffffffb)
+let prime_equiv:_:unit{S.prime == 0x03fffffffffffffffffffffffffffffffb} =
+  assert_norm(S.prime == 0x03fffffffffffffffffffffffffffffffb)
 
-let poly1305_encode_block_equiv (b:New.poly_block)
-  : Lemma (New.poly1305_encode_block b == Orig.encode (seq_len b) b)
-           [SMTPat (New.poly1305_encode_block b)] =
+let poly1305_encode_block_equiv (b:H.poly_block_t)
+  : Lemma (H.poly1305_encode_block b == S.encode (seq_len b) b)
+          [SMTPat (H.poly1305_encode_block b)] =
     Lib.ByteSequence.lemma_reveal_uint_to_bytes_le #U128 #SEC (b <: Lib.ByteSequence.lbytes 16)
 
-
-let poly1305_encode_last_equiv (b:New.sub_block)
-  : Lemma (New.poly1305_encode_last (seq_len b) b == Orig.encode (seq_len b) b)
-           [SMTPat (New.poly1305_encode_last (seq_len b) b)] =
+let poly1305_encode_last_equiv (b:H.sub_block_t {range (Seq.length b) U32})
+  : Lemma (H.poly1305_encode_last (seq_len b) b == S.encode (seq_len b) b)
+          [SMTPat (H.poly1305_encode_last (seq_len b) b)] =
   let fb = array_from_slice (secret (pub_u8 0x0)) (16) (b) (usize 0) (seq_len (b)) in
   let n_1 = uint128_from_le_bytes fb in
   let n_2 = Lib.ByteSequence.nat_from_bytes_le b in
@@ -64,42 +62,42 @@ let poly1305_encode_last_equiv (b:New.sub_block)
   ()
 
 
-let poly1305_init_equiv (k:New.poly_key)
-  : Lemma (let (a,r,k') = New.poly1305_init k in
-           let (a',r') = Orig.poly1305_init k in
+let poly1305_init_equiv (k:H.poly_key_t)
+  : Lemma (let (a,r,k') = H.poly1305_init k in
+           let (a',r') = S.poly1305_init k in
            a == a' /\ r == r' /\ k' == k)
-           [SMTPat (New.poly1305_init k)] =
+           [SMTPat (H.poly1305_init k)] =
            ()
 
-let poly1305_update_block_equiv (b:New.poly_block) (st:New.poly_state)
+let poly1305_update_block_equiv (b:H.poly_block_t) (st:H.poly_state_t)
   : Lemma (let (a,r,k) = st in
-           let a' = Orig.poly1305_update1 r (seq_len b) b a in
-           New.poly1305_update_block b st == (a',r,k))
-           [SMTPat (New.poly1305_update_block b st)]
+           let a' = S.poly1305_update1 r (seq_len b) b a in
+           H.poly1305_update_block b st == (a',r,k))
+           [SMTPat (H.poly1305_update_block b st)]
            = ()
 
-let poly1305_update_blocks_equiv (m:byte_seq) (st:New.poly_state)
-  : Lemma (let (a,r,k) = st in
-           let (a',_,_) = New.poly1305_update_blocks m st in
-           let nblocks = seq_len m / 16 in
-           let m' = Lib.Sequence.sub #_ #(seq_len m) m 0 (nblocks * 16) in
-           a' == Lib.Sequence.repeat_blocks_multi 16 m' (Orig.poly1305_update1 r 16) a) 
-           [SMTPat (New.poly1305_update_blocks m st)]
-           =
-           admit()
+// let poly1305_update_blocks_equiv (m:byte_seq) (st:H.poly_state)
+//   : Lemma (let (a,r,k) = st in
+//            let (a',_,_) = H.poly1305_update_blocks m st in
+//            let nblocks = seq_len m / 16 in
+//            let m' = Lib.Sequence.sub #_ #(seq_len m) m 0 (nblocks * 16) in
+//            a' == Lib.Sequence.repeat_blocks_multi 16 m' (S.poly1305_update1 r 16) a) 
+//            [SMTPat (H.poly1305_update_blocks m st)]
+//            =
+//            admit()
 
 
-let poly1305_update_last_equiv (b:New.sub_block{seq_len b < 16}) (st:New.poly_state)
+let poly1305_update_last_equiv (b:H.sub_block_t{seq_len b < 16}) (st:H.poly_state_t)
   : Lemma (let (a,r,k) = st in
-           let a' = Orig.poly1305_update_last r (seq_len b) b a in
-           New.poly1305_update_last (seq_len b) b st == (a',r,k))
-           [SMTPat (New.poly1305_update_last (seq_len b) b st)]
+           let a' = S.poly1305_update_last r (seq_len b) b a in
+           H.poly1305_update_last (seq_len b) b st == (a',r,k))
+           [SMTPat (H.poly1305_update_last (seq_len b) b st)]
            = ()
 
-let poly1305_finish_equiv (st:New.poly_state)
+let poly1305_finish_equiv (st:H.poly_state_t)
   : Lemma (let (a,r,k) = st in
-           New.poly1305_finish st == Orig.poly1305_finish k a)
-           [SMTPat (New.poly1305_finish st)] =
+           H.poly1305_finish st == S.poly1305_finish k a)
+           [SMTPat (H.poly1305_finish st)] =
   let (a,r,k) = st in
   Lib.ByteSequence.lemma_reveal_uint_to_bytes_le #U128 #SEC (Lib.Sequence.sub k 16 16);
   let s : uint128 = Lib.ByteSequence.uint_from_bytes_le #U128 (Lib.Sequence.sub k 16 16) in
@@ -123,8 +121,8 @@ let poly1305_finish_equiv (st:New.poly_state)
   Lib.ByteSequence.lemma_nat_to_from_bytes_le_preserves_value resby1 16 res1;
   Lib.ByteSequence.nat_from_intseq_le_inj resby1 resby2;
   assert (resby1 == resby2);
-  assert (New.poly1305_finish st == resby2);
-  assert (Orig.poly1305_finish k a == resby1);
+  admitP (H.poly1305_finish st == resby2);
+  assert (S.poly1305_finish k a == resby1);
   ()
 
 (*
@@ -135,14 +133,46 @@ let poly1305_finish_equiv (st:New.poly_state)
   it won't be necessary.
 *)
 
-let poly1305_update_equiv (m:byte_seq) (st:New.poly_state)
-  : Lemma (let (a,r,k) = st in
-           let a' = Orig.poly1305_update m a r in
-           New.poly1305_update m st == (a',r,k))
-           [SMTPat (New.poly1305_update m st)]
-           =
-          admit()
+// let poly1305_update_block
+//   (b_11 : poly_block_t)
+//   (st_12 : poly_state_t)
+//   : poly_state_t =
+//   let (acc_13, r_14, k_15) : (field_element_t & field_element_t & poly_key_t) =
+//     st_12
+//   in
+//   (((poly1305_encode_block (b_11)) +% (acc_13)) *% (r_14), r_14, k_15)
 
-let poly1305_mac_equiv (m:byte_seq) (k:New.poly_key)
-  : Lemma (New.poly1305 m k == Orig.poly1305_mac m k) =
+// let poly1305_update1 (r:felem) (len:size_nat{len <= size_block}) (b:lbytes len) (acc:felem) : Tot felem =
+//   (encode len b `fadd` acc) `fmul` r
+
+let poly1305_update_blocks
+  (m : byte_seq)
+  (st : H.poly_state_t)
+  : r:H.poly_state_t{r == H.poly1305_update_blocks m st} =
+  let blocks: uint_size = seq_len m / H.blocksize_v in
+  let f (i: uint_size {i < blocks}) (s: H.poly_state_t) = H.poly1305_update_block (array_from_seq 16 (seq_get_exact_chunk m H.blocksize_v i)) s in
+  let f' = (fun (i: uint_size {i < blocks}) (s: H.poly_state_t) -> 
+          let (a, r, k) = s in
+          let b = array_from_seq 16 (seq_get_exact_chunk m H.blocksize_v i) in
+          let a' = S.poly1305_update1 r (seq_len b) b a in
+           // H.poly1305_update_block b st == (a',r,k)
+           (a',r,k)
+        // S.poly1305_update1 (array_from_seq 16 (seq_get_exact_chunk m H.blocksize_v i)) s
+  ) in
+  assert (forall i x. f i x == f' i x);
+  let _ = foldi 0 blocks f' st in
+  let r: H.poly_state_t = foldi 0 blocks f st in
+  r
+  
+
+let poly1305_update_equiv (m:byte_seq) (st:H.poly_state)
+  : Lemma (let (a,r,k) = st in
+           let a' = S.poly1305_update m a r in
+           H.poly1305_update m st == (a',r,k))
+           [SMTPat (H.poly1305_update m st)]
+  =
+    admit()
+
+let poly1305_mac_equiv (m:byte_seq) (k:H.poly_key)
+  : Lemma (H.poly1305 m k == S.poly1305_mac m k) =
     ()
