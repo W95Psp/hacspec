@@ -20,7 +20,6 @@ let poly1305_encode_r_equiv (b:H.poly_block_t)
   Lib.ByteSequence.lemma_reveal_uint_to_bytes_le #U128 #SEC (array_from_seq 16 b);
   Lib.ByteSequence.nat_from_intseq_le_slice_lemma b 8;
   assert (v n_1 == v lo + pow2 64 * v hi);
-
   let mask128 = (secret (pub_u128 0xffffffc0ffffffc0ffffffc0fffffff)) in
   let mask0 = u64 0x0ffffffc0fffffff in
   let mask1 = u64 0x0ffffffc0ffffffc in
@@ -35,11 +34,23 @@ let poly1305_encode_r_equiv (b:H.poly_block_t)
   assert (v n_2 == UInt.logand #128 (v n_1) (v mask128));
   assert (v lo' == UInt.logand #64 (v lo) (v mask0));
   assert (v hi' == UInt.logand #64 (v hi) (v mask1));
-  logand_uint64_uint128 (v lo) (v mask0) (v hi) (v mask1);
-  ()
+  logand_uint64_uint128 (v lo) (v mask0) (v hi) (v mask1)
 
-let prime_equiv:_:unit{S.prime == 0x03fffffffffffffffffffffffffffffffb} =
-  assert_norm(S.prime == 0x03fffffffffffffffffffffffffffffffb)
+let prime_equiv: squash (S.prime == 0x03fffffffffffffffffffffffffffffffb)
+  = _ by (Tactics.compute ())
+
+// [H.field_element_t] is [x:ℕ{x<S.prime}] while [S.felem] is
+// [x:ℕ{x<=S.prime-1}]
+let lemma_field_element_t_felem: squash (H.field_element_t == S.felem)
+  = _ by FStar.Tactics.(
+      compute ();
+      // Rewrite [a≤b] into [a<b+1]
+      l_to_r [binder_to_term (tcut (quote ((a:int) -> (b:int) -> squash ((a <= b) == (a < b + 1)))))];
+      // normalize that `b+1`
+      norm [primops];
+      // we're left with the arrow goal [tcut] introduced, convert it to an implication
+      trefl (); let _ = intros () in ()
+    )
 
 let poly1305_encode_block_equiv (b:H.poly_block_t)
   : Lemma (H.poly1305_encode_block b == S.encode (seq_len b) b)
@@ -58,45 +69,38 @@ let poly1305_encode_last_equiv (b:H.sub_block_t {range (Seq.length b) U32})
   assert (Lib.ByteSequence.nat_from_intseq_le (Lib.Sequence.sub fb (seq_len b) (seq_len fb - seq_len b)) == 0);
   Lib.ByteSequence.lemma_reveal_uint_to_bytes_le #U128 #SEC fb;
   Lib.ByteSequence.nat_from_intseq_le_slice_lemma fb (seq_len b);
-  assert (v n_1 == n_2);
-  ()
-
+  assert (v n_1 == n_2)
 
 let poly1305_init_equiv (k:H.poly_key_t)
-  : Lemma (let (a,r,k') = H.poly1305_init k in
-           let (a',r') = S.poly1305_init k in
-           a == a' /\ r == r' /\ k' == k)
-           [SMTPat (H.poly1305_init k)] =
-           ()
+  : Lemma ( let a , r, k'= H.poly1305_init k in
+            let a', r'   = S.poly1305_init k in
+            a == a' /\ r == r' /\ k' == k
+          ) [SMTPat (H.poly1305_init k)] = ()
 
 let poly1305_update_block_equiv (b:H.poly_block_t) (st:H.poly_state_t)
-  : Lemma (let (a,r,k) = st in
-           let a' = S.poly1305_update1 r (seq_len b) b a in
-           H.poly1305_update_block b st == (a',r,k))
-           [SMTPat (H.poly1305_update_block b st)]
-           = ()
+  : Lemma ( let a, r, k = st in
+            let a' = S.poly1305_update1 r (seq_len b) b a in
+            H.poly1305_update_block b st == (a', r, k)
+          ) [SMTPat (H.poly1305_update_block b st)] = ()
 
 let poly1305_update_last_equiv (b:H.sub_block_t{seq_len b < 16}) (st:H.poly_state_t)
-  : Lemma (let (a,r,k) = st in
-           let a' = S.poly1305_update_last r (seq_len b) b a in
-           H.poly1305_update_last (seq_len b) b st == (a',r,k))
-           [SMTPat (H.poly1305_update_last (seq_len b) b st)]
-           = ()
+  : Lemma ( let a, r, k = st in
+            let a' = S.poly1305_update_last r (seq_len b) b a in
+            H.poly1305_update_last (seq_len b) b st == (a',r,k)
+          ) [SMTPat (H.poly1305_update_last (seq_len b) b st)] = ()
 
 let nat_to_byte_seq_le_lemma (n: pos) (len: uint_size) (x: nat_mod n) 
   : Lemma (forall (i: nat {i < len}). FStar.Seq.index (nat_to_byte_seq_le n len x) i
                             == uint #U8 #SEC ((x / pow2 (8 * i)) % pow2 8))
   = let y = x % (pow2 (8 * len)) in
-    let r = Lib.ByteSequence.nat_to_intseq_le #U8 #SEC len y in
-    introduce forall (i: nat {i < len}). FStar.Seq.index r i == uint #U8 #SEC ((x / pow2 (8 * i)) % pow2 8)
-         with begin 
-      let j = len - i in
-      Lib.ByteSequence.index_nat_to_intseq_le #U8 #SEC len y i;
-      Math.Lemmas.modulo_division_lemma x (pow2 (8*i)) (pow2 (8*j));
-      Math.Lemmas.pow2_plus (8*(j-1)) 8;
-      Math.Lemmas.modulo_modulo_lemma (x / pow2 (8*i)) (pow2 8) (pow2 (8*(j-1)));
-      Math.Lemmas.pow2_plus (8*i) (8*j)
-    end
+    introduce forall (i: nat {i < len}). FStar.Seq.index (Lib.ByteSequence.nat_to_intseq_le #U8 #SEC len y) i
+                               == uint #U8 #SEC ((x / pow2 (8 * i)) % pow2 8)
+         with begin let j = len - i in
+                    Lib.ByteSequence.index_nat_to_intseq_le #U8 #SEC len y i;
+                    Math.Lemmas.modulo_division_lemma x (pow2 (8*i)) (pow2 (8*j));
+                    Math.Lemmas.pow2_plus (8*(j-1)) 8;
+                    Math.Lemmas.modulo_modulo_lemma (x / pow2 (8*i)) (pow2 8) (pow2 (8*(j-1)));
+                    Math.Lemmas.pow2_plus (8*i) (8*j) end
 
 let poly1305_finish_equiv (st:H.poly_state_t)
   : Lemma (let (a,r,k) = st in
@@ -111,7 +115,6 @@ let poly1305_finish_equiv (st:H.poly_state_t)
   nat_to_byte_seq_le_lemma 0x03fffffffffffffffffffffffffffffffb 17 a;
   nat_to_byte_seq_le_lemma 0x03fffffffffffffffffffffffffffffffb 16 a;
   assert (aby `Seq.equal` sliced_aby);
-  
   Lib.ByteSequence.lemma_reveal_uint_to_bytes_le #U128 #SEC aby;
   let a' = a % pow2 128 in
   assert (aby == Lib.ByteSequence.nat_to_bytes_le #SEC 16 a');
@@ -131,26 +134,7 @@ let poly1305_finish_equiv (st:H.poly_state_t)
   Lib.ByteSequence.nat_from_intseq_le_inj resby1 resby2;
   assert (resby1 == resby2);
   assert (H.poly1305_finish st == resby2);
-  assert (S.poly1305_finish k a == resby1);
-  ()
-
-(*
-  The above proof assumes that a.to_byte_seq_le() is changed to a.to_byte_seq_le(16)
-  which is then translated as above. If we instead extract 17 bytes, then we have
-  to use the nat_from_intseq_le_slice lemma, to cut off the bytstream at 16 bytes
-  and then use % pow2 128 etc. This works, but I have removed the proof, since
-  it won't be necessary.
-*)
-
-let lemma_field_element_t_felem: squash (H.field_element_t == S.felem)
-  = _ by FStar.Tactics.(
-      compute ();
-      l_to_r [binder_to_term (tcut (quote ((a:int) -> (b:int) -> squash ((a <= b) == (a < b + 1)))))];
-      norm [primops];
-      trefl ();
-      let _ = intros () in
-      smt ()
-    )
+  assert (S.poly1305_finish k a == resby1)
 
 let transitivity_eq (a b c: 'a): Lemma (requires a == b /\ b == c) (ensures a == c)
   = ()
@@ -242,10 +226,10 @@ let poly1305_update_equiv'
 #pop-options
 
 let poly1305_update_equiv (m:byte_seq) (st:H.poly_state_t)
-  : Lemma (let (a,r,k) = st in
-           let a' = S.poly1305_update m a r in
-           H.poly1305_update m st == (a',r,k))
-           [SMTPat (H.poly1305_update m st)]
+  : Lemma ( let a, r, k = st in
+            let a' = S.poly1305_update m a r in
+            H.poly1305_update m st == (a',r,k)
+          ) [SMTPat (H.poly1305_update m st)]
   = let _ = poly1305_update_equiv' m st in
     ()
 
