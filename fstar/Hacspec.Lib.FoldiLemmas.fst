@@ -15,6 +15,33 @@ module LC = Lib.LoopCombinators
 
 #set-options "--fuel 0 --ifuel 0 --z3rlimit 30"
 
+let rec foldi_relation
+  (lo: uint_size)
+  (hi: uint_size{lo <= hi})
+  (f: (i:uint_size{i < hi}) -> 'a -> 'a)
+  (g: (i:uint_size{i < hi}) -> 'b -> 'b)
+  (rel: (af:'a -> ag:'b -> Type0))
+  (a0: 'a) (b0: 'b {a0 `rel` b0})
+  : Lemma (requires forall (i:uint_size{i < hi}) (a:'a) (b:'b)
+                    . a `rel` b ==> f i a `rel` g i b)
+          (ensures  foldi lo hi f a0 `rel` foldi lo hi g b0)
+  = if lo = hi
+    then ( unfold_foldi hi hi f a0;
+           unfold_foldi hi hi g b0 )
+    else ( unfold_foldi_right lo hi f a0;
+           unfold_foldi_right lo hi g b0;
+           foldi_relation lo (hi-1) f g rel a0 b0 )
+
+let foldi_extensionality
+  (lo: uint_size)
+  (hi: uint_size{lo <= hi})
+  (f: (i:uint_size{i < hi}) -> 'a -> 'a)
+  (g: (i:uint_size{i < hi}) -> 'a -> 'a)
+  (init: 'a)
+  : Lemma (requires forall i a. f i a == g i a)
+          (ensures  foldi lo hi f init == foldi lo hi g init)
+  = foldi_relation lo hi f g (==) init init
+
 unfold let map_blocks_foldi_fun
   (len: uint_size) (blocksize: size_pos)
   (max: uint_size {max * blocksize <= len})
