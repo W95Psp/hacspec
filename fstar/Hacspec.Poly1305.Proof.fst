@@ -136,93 +136,54 @@ let poly1305_finish_equiv (st:H.poly_state_t)
   assert (H.poly1305_finish st == resby2);
   assert (S.poly1305_finish k a == resby1)
 
-let transitivity_eq (a b c: 'a): Lemma (requires a == b /\ b == c) (ensures a == c)
-  = ()
+let foldi_relation
+  (lo: uint_size)
+  (hi: uint_size{lo <= hi})
+  (f: (i:uint_size{i < hi}) -> 'a -> 'a)
+  (g: (i:uint_size{i < hi}) -> 'b -> 'b)
+  (rel: (af:'a -> ag:'b -> Type0))
+  (a0: 'a) (b0: 'b) (a0b0rel: squash (a0 `rel` b0))
+  : Lemma (requires forall (i:uint_size{i < hi}) (a:'a) (b:'b)
+                    . a `rel` b ==> f i a `rel` g i b)
+          (ensures  foldi lo hi f a0 `rel` foldi lo hi g b0)
+  = Hacspec.Lib.FoldiLemmas.foldi_relation lo hi f g rel a0 b0
 
-#push-options "--z3rlimit 15"
-let poly1305_update_equiv'
-  (m : byte_seq)
-  (st : H.poly_state_t)
-  : r:H.poly_state_t{
-      r == H.poly1305_update m st
-    /\ r._1 == S.poly1305_update m st._1 st._2
-  } =
-  let blocks: uint_size = seq_len m / H.blocksize_v in
-  let f0: (i:uint_size {i < blocks}) -> H.poly_state_t -> H.poly_state_t
-    = fun i s -> H.poly1305_update_block (array_from_seq 16 (seq_get_exact_chunk m H.blocksize_v i)) s in
-  let f1: (i:uint_size {i < blocks}) -> H.poly_state_t -> H.poly_state_t
-    = fun i s -> let a, r, k = s in
-              let b = array_from_seq 16 (seq_get_exact_chunk m H.blocksize_v i) in
-              let a' = S.poly1305_update1 r (seq_len b) b a in
-              a', r, k
-  in
-  let f2: (i:uint_size {i < blocks}) -> s:H.poly_state_t -> s':H.poly_state_t{
-      let a0, r0, k0 = s  in
-      let a1, r1, k1 = s' in
-      r0 == r1 /\ k0 == k1
-    }
-    = fun i s -> let a, r, k = s in
-              let b = array_from_seq 16 (seq_get_exact_chunk m H.blocksize_v i) in
-              let a' = S.poly1305_update1 r (seq_len b) b a in
-              a', r, k
-  in
-  let f3: r:H.field_element_t -> (i:uint_size {i < blocks}) -> a0:H.field_element_t -> a1:H.field_element_t
-    = fun r i a0 -> let b = array_from_seq 16 (seq_get_exact_chunk m H.blocksize_v i) in
-                let a1 = S.poly1305_update1 r (seq_len b) b a0 in
-                a1
-  in
-  assert (forall (i: uint_size {i < blocks}) (s: H.poly_state_t). f1 i s == f2 i s);
-  introduce forall (i: uint_size {i < blocks}) (s: H.poly_state_t). f0 i s == f1 i s
-  with begin let b = array_from_seq 16 (seq_get_exact_chunk m H.blocksize_v i) in
-             poly1305_update_block_equiv (array_from_seq 16 (seq_get_exact_chunk m H.blocksize_v i)) s;
-             assert (f1 i s == H.poly1305_update_block b s) end;
-  Hacspec.Lib.FoldiLemmas.foldi_extensionality 0 blocks f0 f1 st;
-  let r0: H.poly_state_t = foldi 0 blocks f0 st in
-  let r1: H.poly_state_t = foldi 0 blocks f1 st in
-  let r2: H.poly_state_t = foldi 0 blocks f2 st in
-  transitivity_eq r0 r1 r2;
-  let r3'0: H.field_element_t = foldi 0 blocks (f3 st._2) st._1 in
-  let r3: H.poly_state_t = (r3'0, st._2, st._3) in
-  Hacspec.Lib.FoldiLemmas.foldi_relation 0 blocks
-                 f2 (f3 st._2)
-                 (fun (a, r, k) a' -> a' == a /\ r == st._2 /\ k == st._3)
-                 st st._1;
-  transitivity_eq r0 r2 r3;
-  assert (r3 == r0);
-  let r3'1 = Seq.repeat_blocks #uint8 #S.felem S.size_block m
-    (S.poly1305_update1 st._2 S.size_block)
-    (S.poly1305_update_last st._2) st._1 in
-    
-  Seq.lemma_repeat_blocks #uint8 #S.felem S.size_block m
-    (S.poly1305_update1 st._2 S.size_block)
-    (S.poly1305_update_last st._2) st._1;
-    
-  let r3'3: H.field_element_t = Lib.LoopCombinators.repeat_right 0 blocks (Lib.LoopCombinators.fixed_a S.felem) (f3 st._2) st._1  in
-  foldi_equiv_repeat_right 0 blocks (f3 st._2) st._1;
+let deconstructy_reconstruct_tup3 st: Lemma (
+    let FStar.Pervasives.Native.Mktuple3 #_ #_ #_ a r k = st in
+    Mktuple3?._1 st == a /\ r == Mktuple3?._2 st /\ k == Mktuple3?._3 st
+  ) = ()
 
-  let last0 : seq uint8 = seq_get_remainder_chunk m H.blocksize_v in
-  let all0 = H.poly1305_update_last (seq_len last0) last0 r3 in
-
-  let len = FStar.Seq.length m in
-  let nb = len / S.size_block in
-  let rem = len % S.size_block in
-  let r3'2'0 = Lib.LoopCombinators.repeati nb (Seq.repeat_blocks_f S.size_block m (S.poly1305_update1 st._2 S.size_block) nb) st._1 in
-  let r3'2'1 = Lib.LoopCombinators.repeati nb (f3 st._2) st._1 in
-  Lib.Sequence.Lemmas.repeati_extensionality #S.felem nb (f3 st._2) (Seq.repeat_blocks_f S.size_block m (S.poly1305_update1 st._2 S.size_block) nb) st._1;
-  assert (r3'2'1 == r3'2'0);
-  // assert (Lib.LoopCombinators.repeati nb (Seq.repeat_blocks_f S.size_block m (S.poly1305_update1 st._2 S.size_block) nb) st._1 == Lib.LoopCombinators.repeati nb (f3 st._2) st._1);
-  let r3'2'2 = Lib.LoopCombinators.repeat_right 0 nb (Lib.LoopCombinators.fixed_a S.felem) (f3 st._2) st._1 in
-  Lib.LoopCombinators.repeati_def nb (f3 st._2) st._1;
-  assert (r3'2'1 == r3'2'2);
-  assert (r3'2'2 == r3'3);
-  assert (r3'2'0 == r3'0);
-  let last1 = FStar.Seq.slice m (nb * S.size_block) len in
-  assert (last0 `FStar.Seq.equal` last1);
-  let all1 = S.poly1305_update_last st._2 rem last1 r3'2'0 in
-  assert (r3'1 == all1);
-  assert (all0._1 == all1);
-  assert (r3'2'0 == r3'2'0);
-  all0
+#push-options "--z3rlimit 25 --retry 3"
+let poly1305_update_equiv_aux (m:byte_seq) (st:H.poly_state_t): Lemma (
+    let a, r, k = st in
+    let a' = S.poly1305_update m a r in
+    H.poly1305_update m st == (a',r,k)
+  )
+  = let blocks = seq_len m / H.blocksize_v in
+    let f0   (i:uint_size {i < blocks}) s 
+        = H.poly1305_update_block (array_from_seq 16 (seq_get_exact_chunk m H.blocksize_v i)) s 
+    in
+    let f1 r (i:uint_size {i < blocks}) a
+        = let b = array_from_seq 16 (seq_get_exact_chunk m H.blocksize_v i) in
+          S.poly1305_update1 r (seq_len b) b a
+    in
+    let f2   (i:uint_size {i < blocks}) (a, r, k) 
+        = f1 r i a, r, k 
+    in
+    introduce forall (i: uint_size {i < blocks}) (s: H.poly_state_t). f0 i s == f2 i s
+         with ( let b = array_from_seq 16 (seq_get_exact_chunk m H.blocksize_v i) in
+                assert (f2 i s == H.poly1305_update_block b s) );
+    Hacspec.Lib.FoldiLemmas.foldi_extensionality 0 blocks f0 f2 st;
+    Hacspec.Lib.FoldiLemmas.foldi_relation 0 blocks
+                   f2 (f1 st._2)
+                   (fun (a, r, k) a' -> a' == a /\ r == st._2 /\ k == st._3)
+                   st st._1;
+    Seq.lemma_repeat_blocks #uint8 #S.felem S.size_block m
+      (S.poly1305_update1 st._2 S.size_block)
+      (S.poly1305_update_last st._2) st._1;
+    foldi_equiv_repeat_right 0 blocks (f1 st._2) st._1;
+    Lib.Sequence.Lemmas.repeati_extensionality #S.felem blocks (f1 st._2) (Seq.repeat_blocks_f S.size_block m (S.poly1305_update1 st._2 S.size_block) blocks) st._1;
+    Lib.LoopCombinators.repeati_def blocks (f1 st._2) st._1
 #pop-options
 
 let poly1305_update_equiv (m:byte_seq) (st:H.poly_state_t)
@@ -230,9 +191,7 @@ let poly1305_update_equiv (m:byte_seq) (st:H.poly_state_t)
             let a' = S.poly1305_update m a r in
             H.poly1305_update m st == (a',r,k)
           ) [SMTPat (H.poly1305_update m st)]
-  = let _ = poly1305_update_equiv' m st in
-    ()
+  = poly1305_update_equiv_aux m st
 
 let poly1305_mac_equiv (m:byte_seq) (k:H.poly_key_t)
-  : Lemma (H.poly1305 m k == S.poly1305_mac m k) =
-    ()
+  : Lemma (H.poly1305 m k == S.poly1305_mac m k) = ()
