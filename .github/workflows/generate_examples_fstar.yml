@@ -1,0 +1,49 @@
+name: Generate Examples - FStar
+
+on: [push, pull_request, release]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        ocaml-compiler:
+          - 4.12.x
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Build release
+        run: cargo build --verbose --release
+      - name: Build release - Examples
+        run: cargo build --verbose --release
+        working-directory: ./examples
+      - name: Extract examples to FStar
+        run: cargo hacspec -e fst --dir ../fstar "*" 
+        working-directory: ./examples
+      - name: Use OCaml ${{ matrix.ocaml-compiler }}
+        uses: ocaml/setup-ocaml@v2
+        with:
+          ocaml-compiler: ${{ matrix.ocaml-compiler }}
+      - name: Install FStar
+        run: |
+          opam pin add fstar --dev-repo
+          opam install fstar
+      - name: Verify files with FStar
+        run: |
+          git clone 
+        working-directory: ./examples
+      - uses: actions/checkout@v3
+        with:
+          repository: hacl-star/hacl-star
+          submodules: true
+      - name: Verify files with FStar
+        run: |
+          export FSTAR=fstar.exe
+          export HACL_HOME=../hacl-star/
+          make verify-all
+        working-directory: ./examples
