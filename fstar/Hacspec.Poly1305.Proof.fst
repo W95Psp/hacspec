@@ -153,7 +153,7 @@ let deconstructy_reconstruct_tup3 st: Lemma (
     Mktuple3?._1 st == a /\ r == Mktuple3?._2 st /\ k == Mktuple3?._3 st
   ) = ()
 
-#push-options "--z3rlimit 25 --retry 3"
+#push-options "--z3rlimit 75 --retry 6"
 let poly1305_update_equiv_aux (m:byte_seq) (st:H.poly_state_t): Lemma (
     let a, r, k = st in
     let a' = S.poly1305_update m a r in
